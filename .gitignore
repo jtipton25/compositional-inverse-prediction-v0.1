@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.html
+
+/model-fit/*.RData
+/model-fit/diagnostics/*
+/model-fit/progress/*
+/results/*
+/figures/*

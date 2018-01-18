@@ -1,0 +1,904 @@
+---
+title: "Dirichlet Multinomial Model"
+author: "John Tipton"
+date: "May 7, 2016"
+output: html_document  
+---
+
+
+```{r setup, tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=6, include=FALSE, eval=TRUE}
+library(mvnfast)
+library(ggplot2)
+library(ggmcmc)
+library(Matrix)
+library(fields)
+library(MCMCpack)
+library(coda)
+library(nimble)
+library(snowfall)
+library(mcmcplots)
+library(data.table)
+library(DirichletReg)
+library(randomForest)
+library(xtable)
+library(gridExtra)
+library(knitr)
+library(analogue)
+library(here)
+library(GGally)
+
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+
+
+##
+## source functions used in the code below
+##
+
+## simulate the cholesky of the correlation matrix
+source(here("functions/make-lkj.R"))
+
+## simulate the correlation matrix
+source(here("functions/make-correlation-matrix.R"))
+
+## layout multiple ggplot objects in one plot
+source(here("/functions/multiplot.R"))
+
+## load function to convert MCMC output to CODA object for diagnostics
+source(here("/functions/convert-to-coda.R"))
+
+## load Gelman-Rubin diagnostic for lack of convergence
+source(here("/functions/make_gelman_rubin.R"))
+
+## evaluate a probabilistic predictive distribution using CRPS score
+Rcpp::sourceCpp(here("/functions/makeCRPS.cpp"))
+
+## evaluate a Gaussian predictive distribution summarized by mean and 
+## standard deviation using CRPS score
+source(here("/functions/makeCRPSGauss.R"))
+
+##
+## Setup MCMC parameters
+##
+
+n_adapt <- 150000
+n_mcmc <- 150000
+n_thin <- 100
+n_chains <- 4
+## B-spline degrees of freedom parameter
+df <- 6
+n_save <- n_mcmc / n_thin
+n_samples <- n_chains * n_save
+## Output MCMC progress modlulo every 'message' iterations
+message <- 1000
+
+## currently can choose exponential or gaussian covariance function
+corr_function <- "exponential"
+```
+
+# Simulation of data
+Below we simulate data from our model:
+
+```{r simulate-dm-mvgp, tidy=TRUE, echo=FALSE, message=FALSE, eval=TRUE}
+set.seed(101)
+## number of sites from which to simulate
+N <- 1000
+
+## number of hold-out sites to use for reconstruction
+N_obs <- N - 200
+## index for the training dataset
+train <- 1:N_obs
+## index for the test dataset
+test <- (N_obs+1):N
+## number of "species"
+d <- 8
+
+## Simulate the data
+mu <- rnorm(d)
+X <- rnorm(N, 0, 2)
+
+corr_out <- make_correlation_matrix(d, eta = 1)
+R <- corr_out$R
+xi <- corr_out$xi
+
+## simulate the marginal variances
+tau <- rgamma(d, 5, 5)
+R_tau <- R %*% diag(tau)
+Sigma <- t(R_tau) %*% R_tau
+
+sigma2 <- 1
+phi <- 5
+epsilon <- matrix(rnorm(N*d, 0, sqrt(sigma2)), N, d)
+
+# ##
+# ## simulate latent random effect from the full model
+# ##
+# 
+# sigma2 <- 0.125
+# phi <- 150
+# D <- as.matrix(dist(X))
+# C <- exp(- D / phi)
+# 
+# set.seed(10231)
+# 
+# y <- matrix(0, N, d)
+# eta <- t(rmvn(d, rep(0, N), C))
+# 
+#
+
+##
+## Simulate latent random effect from the predictive process model
+## 
+
+n_knots <- 30
+X_knots <- seq(min(X)-1.25*sd(X), max(X)+1.25*sd(X), length=n_knots)
+D_knots <- as.matrix(dist(X_knots))               ## distance among knots
+D_interpolate <- as.matrix(rdist(X, X_knots))     ## distance from observed 
+                                                  ## locations to knots
+if (corr_function == "gaussian") {
+  C_knots <- exp(- D_knots^2 / phi) #+ diag(n_knots)* 1e-12
+  c_knots <- exp( - D_interpolate^2 / phi)
+} else if (corr_function == "exponential") {
+  C_knots <- exp(- D_knots / phi) #+ diag(n_knots) * 1e-12
+  c_knots <- exp( - D_interpolate / phi)
+}
+
+C_knots_inv <- solve(C_knots)
+Z_knots <- c_knots %*% C_knots_inv
+zero_knots <- rep(0, n_knots)
+eta_star <- t(mvnfast::rmvn(d, zero_knots, chol(C_knots), isChol=TRUE))
+zeta <- Z_knots %*% eta_star %*% R_tau
+# zeta <- Z_knots %*% eta_star %*% t(R_tau)
+
+## 
+## sample from Dirichlet-Multinomial model with parameter alpha and sample size N_i
+##
+
+alpha <- exp(t(mu + t(zeta)))
+
+y <- matrix(0, N, d)
+N_i <- rpois(N, 100)
+
+for (i in 1:N) {
+  ## simulate from Dirichlet-Multinomial distribution
+  tmp <- rgamma(d, alpha[i, ], 1)
+  p <- tmp / sum(tmp)
+  y[i, ] <- rmultinom(1, N_i[i], p)
+}
+```
+
+
+
+```{r}
+y_dens <- matrix(0, N, d)
+p_alpha <- matrix(0, N, d)
+for (i in 1:N) {
+  y_dens[i, ] <- y[i, ] / sum(y[i, ])
+  p_alpha[i, ] <- alpha[i, ] / sum(alpha[i, ])
+}
+
+simPlotData <- data.frame(species=as.factor(rep(1:d, each=N)), count=c(y_dens), 
+                          depth=rep(X, times=d), alpha=c(p_alpha))
+
+gsim1 <- ggplot(simPlotData, aes(x=depth, y=count, color=species, group=species)) + 
+  geom_point(alpha=0.25) + theme(legend.position="none") +
+  ggtitle("Simulated functional response vs. depth") + 
+  geom_line(aes(x=depth, y=alpha, col = species), simPlotData, lwd=1.25)
+
+gsim2 <- ggplot(simPlotData, aes(x=depth, y=count, color=species, group=species)) + 
+  geom_point(alpha=0.25) + theme(legend.position="none") +
+  ggtitle("Simulated functional response vs. depth by species") + 
+  geom_line(aes(x=depth, y=alpha, col = species), simPlotData, lwd=1.25) + 
+  facet_wrap( ~ species, ncol = 4)
+
+multiplot(gsim1, gsim2, cols=1)
+```
+
+
+
+## Model statement
+\begin{align*}
+\mathbf{y}_i & \sim \operatorname{Dirichlet-Multinomial}(\boldsymbol{\alpha}_i, N_i) \\
+\log(\boldsymbol{\alpha}_i) & = \boldsymbol{\zeta}_i  \\
+%
+\boldsymbol{\zeta}_i & \sim \operatorname{N}(\boldsymbol{\mu} + \boldsymbol{\nu}_i, \sigma^2 \mathbf{I})  \\  
+%
+\boldsymbol{\nu}_i & = \mathbf{Z}_i \boldsymbol{\eta}^{\star} \mathbf{R}_{\boldsymbol{\tau}} \\
+%
+\mathbf{Z}_i & = \mathbf{c}_i {\mathbf{C}^{\star}}^{-1} \operatorname{Chol}(\mathbf{C}^{\star}) \\
+%
+\mathbf{c} & = \exp(- \mathbf{D} / \phi) \\
+%
+\mathbf{C}^{\star} & = \exp(- \mathbf{D}^{\star} / \phi) \\
+%
+\phi & \sim \operatorname{Uniform}(0, 100) \\
+%
+\operatorname{vec}(\boldsymbol{\eta}^{\star}) & \sim \operatorname{Normal}(\mathbf{0}, \mathbf{I}) \\
+%
+\mathbf{R}_{\boldsymbol{\tau}} & = \mathbf{R} \operatorname{diag}(\boldsymbol{\tau}) \\
+% 
+\mathbf{R} & = \operatorname{LKJ}(\boldsymbol{\xi}) \\
+%
+\xi_b & \sim \operatorname{Beta}(\phi_b, \phi_b) \\
+%
+\tau^2_j & \sim \operatorname{Gamma}(0.5, \sigma^2_{\tau^2_j})\\
+%
+\sigma^2_{\tau^2_j} & \sim \operatorname{Gamma}(0.5, A^2)
+\end{align*}
+## Posterior
+
+\begin{align*}
+\left[\mathbf{Y} \middle| \boldsymbol{\zeta}, \boldsymbol{\mu}, \boldsymbol{\eta}^{\star}, \phi, \boldsymbol{\xi}, \boldsymbol{\tau}^2, \boldsymbol{\sigma}^2_{\tau^2}, \right] & \propto \prod_{i=1}^N \left[ \mathbf{y}_i \middle| \boldsymbol{\zeta}_i \right] \left[ \boldsymbol{\zeta} \middle| \boldsymbol{\mu}, \boldsymbol{\eta}^{\star}, \phi, \boldsymbol{\xi}, \boldsymbol{\tau}^2  \right] 
+\left[ \boldsymbol{\mu} \middle| \boldsymbol{\mu}_\mu, \boldsymbol{\Sigma}_\mu \right]
+\left[ \boldsymbol{\eta}^{\star} \right]
+\left[ \phi \right]
+\left[ \boldsymbol{\xi} \right]
+\left[ \boldsymbol{\tau}^2 \middle| \boldsymbol{\sigma}^2_{\tau^2} \right]
+\left[ \boldsymbol{\sigma}^2_{\tau^2} \middle| A^2 \right]
+\end{align*}
+
+## Full conditionals
+### Full conditional for $\boldsymbol{\zeta}_i$
+\begin{align*}
+\left[ \boldsymbol{\zeta}_i \middle| \cdot \right] & \propto \left[ \mathbf{y}_i \middle| \boldsymbol{\zeta}_i \right] \left[ \boldsymbol{\zeta}_i \middle| \boldsymbol{\mu}, \boldsymbol{\eta}^{\star}, \phi, \boldsymbol{\xi}, \boldsymbol{\tau}^2  \right] \\
+%
+& \hspace{6mm} \propto \operatorname{Dirichlet-Multinomial}\left( \exp\left(\boldsymbol{\zeta}_i\right), N_i\right) \times \operatorname{N}\left(\boldsymbol{\zeta}_i \middle| \boldsymbol{\mu} + \boldsymbol{\nu}_i, \sigma^2 \mathbf{I}\right)
+\end{align*}
+which can be sampled using Metropolis-Hastings
+
+### Full conditional for $\boldsymbol{\mu}$
+\begin{align*}
+\left[ \boldsymbol{\mu} \middle| \cdot \right] & \propto 
+\prod_{i=1}^N \left[ \boldsymbol{\zeta}_i \middle| \boldsymbol{\mu}, \boldsymbol{\eta}^{\star}, \phi, \boldsymbol{\xi}, \boldsymbol{\tau}^2  \right]
+\left[ \boldsymbol{\mu} \middle| \boldsymbol{\mu}_\mu, \boldsymbol{\Sigma}_\mu \right] \\
+%
+& \hspace{6mm} \propto \prod_{i=1}^N\operatorname{N}\left(\boldsymbol{\zeta}_i \middle| \boldsymbol{\mu} + \boldsymbol{\nu}_i, \sigma^2 \mathbf{I}\right) \times
+\operatorname{N}\left(\boldsymbol{\mu} \middle| \boldsymbol{\mu}_\mu, \boldsymbol{\Sigma}_\mu\right) \\
+%
+& \hspace{6mm} \propto \exp\left\{ -\frac{1}{2} \sum_{i=1}^N \left[\left(\boldsymbol{\zeta}_i - \left(\boldsymbol{\mu} + \boldsymbol{\nu}_i \right) \right)' \left( \sigma^2 \mathbf{I} \right)^{-1} \left(\boldsymbol{\zeta}_i - \left(\boldsymbol{\mu} + \boldsymbol{\nu}_i \right) \right) \right]\right\} \exp\left\{ -\frac{1}{2}  \left( \boldsymbol{\mu} - \boldsymbol{\mu}_\mu \right)' \boldsymbol{\Sigma}_\mu^{-1} \left( \boldsymbol{\mu} - \boldsymbol{\mu}_\mu \right) \right\} \\
+% 
+& \hspace{6mm} \propto \exp\left\{ -\frac{1}{2} \left[ \boldsymbol{\mu}' \left( \frac{N}{\sigma^2} \mathbf{I} + \boldsymbol{\Sigma}_\mu^{-1} \right) \boldsymbol{\mu} - 2 \boldsymbol{\mu}'  \left( \sum_{i=1}^N \left(\frac{ \boldsymbol{\zeta}_i - \boldsymbol{\nu}_i}{\sigma^2}\right) + \boldsymbol{\Sigma}_\mu^{-1} \boldsymbol{\mu}_\mu \right) \right] \right\}
+\end{align*}
+
+which is $\operatorname{N}(\mathbf{A}^{-1}\mathbf{b}, \mathbf{A}^{-1})$ where
+
+\begin{align*}
+\mathbf{A} & = \frac{N}{\sigma^2} \mathbf{I} + \boldsymbol{\Sigma}_\mu^{-1} \\
+%
+\mathbf{b} & = \sum_{i=1}^N - \left(\frac{ \boldsymbol{\zeta}_i - \boldsymbol{\nu}_i}{\sigma^2} \right) + \boldsymbol{\Sigma}_\mu^{-1} \boldsymbol{\mu}_\mu
+\end{align*}
+
+### Full conditional for $\boldsymbol{\eta}^{\star}$
+\begin{align*}
+\left[ \boldsymbol{\eta}^{\star} \middle| \cdot \right] & \propto \prod_{i=1}^N \left[ \boldsymbol{\zeta}_i \middle| \boldsymbol{\mu}, \boldsymbol{\eta}^{\star}, \phi, \boldsymbol{\xi}, \boldsymbol{\tau}^2  \right] \left[ \boldsymbol{\eta}^{\star} \right] \\
+%
+& \hspace{6mm} \propto \operatorname{N}\left(\operatorname{vec}( \boldsymbol{\zeta}) \middle| \left( \boldsymbol{\mu} \otimes \mathbf{1}_{n^{\star}}\right) + \right( \mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \left) \operatorname{vec}( \boldsymbol{\eta}^{\star}) , \sigma^2 \mathbf{I}_{n^{\star}d} \right) \times \operatorname{N}\left(\operatorname{vec} \left( \boldsymbol{\eta}^{\star} \right) \middle| \mathbf{0}, {\mathbf{C}^{\star}} \right) \\
+%\operatorname{N}\left(\operatorname{vec} \left( \boldsymbol{\eta}^{\star} \right) \middle| \mathbf{0}, \mathbf{I}_{n^{\star}d} \right) \\
+%
+& \hspace{6mm} \propto \exp\left\{ -\frac{1}{2} \left[\left(\operatorname{vec}(\boldsymbol{\zeta}) - \left( \left( \boldsymbol{\mu} \otimes \mathbf{1}_{n^{\star}}\right) + \left( \mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right) \operatorname{vec} (\boldsymbol{\eta}^{\star}) \right) \right)' \left( \sigma^2 \mathbf{I}_{n^{\star}d} \right)^{-1} \left(\operatorname{vec}(\boldsymbol{\zeta}) - \left( \left( \boldsymbol{\mu} \otimes \mathbf{1}_{n^{\star}}\right) + \left( \mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right) \operatorname{vec} (\boldsymbol{\eta}^{\star}) \right) \right) \right]\right\} \\
+%
+% & \hspace{6mm} \times \exp\left\{ -\frac{1}{2} \operatorname{vec}(\boldsymbol{\eta^{\star}})'  \operatorname{vec}(\boldsymbol{\eta^{\star}}) \right\} \\
+& \hspace{6mm} \times \exp\left\{ -\frac{1}{2} \operatorname{vec}(\boldsymbol{\eta^{\star}})' \left( {\mathbf{C}^{\star}} \otimes \mathbf{I}_d \right)^{-1}  \operatorname{vec}(\boldsymbol{\eta^{\star}}) \right\} \\
+%
+& \hspace{6mm} \propto \exp\left\{ -\frac{1}{2} \left[ \operatorname{vec}(\boldsymbol{\eta}^{\star})' \left(  \frac{\left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)' \left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)}{\sigma^2} + \left( \mathbf{C}^{\star} \otimes \mathbf{I} \right)^{-1} \right) \operatorname{vec}(\boldsymbol{\eta}^{\star}) - 2 \operatorname{vec}(\boldsymbol{\eta}^{\star})' \left( \frac{\left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)' \left(\operatorname{vec}(\boldsymbol{\zeta}) - \left( \boldsymbol{\mu} \otimes \mathbf{1}_{n^{\star}} \right) \right) }{\sigma^2} \right) \right] \right\}
+% & \hspace{6mm} \propto \exp\left\{ -\frac{1}{2} \left[ \operatorname{vec}(\boldsymbol{\eta}^{\star})' \left(  \frac{\left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)' \left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)}{\sigma^2} + \mathbf{I}_{n^\star}d} \right) \operatorname{vec}(\boldsymbol{\eta}^{\star}) - 2 \operatorname{vec}(\boldsymbol{\eta}^{\star})' \left( \frac{\left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)' \left(\operatorname{vec}(\boldsymbol{\zeta}) - \left( \mathbf{1}_{n^{\star}} \otimes \boldsymbol{\mu} \right) \right) }{\sigma^2} \right) \right] \right\}
+\end{align*}
+which is $\operatorname{N}(\mathbf{A}^{-1}\mathbf{b}, \mathbf{A}^{-1})$ where
+\begin{align*}
+\mathbf{A} & = \frac{\left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)' \left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)}{\sigma^2} + {\mathbf{C}^{\star}}^{-1} \otimes \mathbf{I}_d \\
+% \mathbf{A} & = \frac{\left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)' \left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)}{\sigma^2} + \mathbf{I}_d \\
+& \hspace{6mm} = \frac{\left(\mathbf{R}_{\boldsymbol{\tau}} \mathbf{R}_{\boldsymbol{\tau}}' \right) \otimes \left(\mathbf{Z}' \mathbf{Z} \right)}{\sigma^2} + {\mathbf{C}^{\star}}^{-1} \otimes \mathbf{I}_d \\
+%
+% & \hspace{6mm} = \frac{\left(\mathbf{R}_{\boldsymbol{\tau}} \mathbf{R}_{\boldsymbol{\tau}}' \right) \otimes \left(\mathbf{Z}' \mathbf{Z} \right)}{\sigma^2} + \mathbf{I}_d \\
+%
+\mathbf{b} & = \frac{\left(\mathbf{R}_{\boldsymbol{\tau}}' \otimes \mathbf{Z} \right)' \left(\operatorname{vec}(\boldsymbol{\zeta}) - \left( \boldsymbol{\mu} \otimes \mathbf{1}_{n^{\star}} \right) \right) }{\sigma^2} \\
+%
+& \hspace{6mm} = \frac{\operatorname{vec}( \mathbf{Z}' \boldsymbol{\zeta} \mathbf{R}_{\boldsymbol{\tau}}' ) - \left( \mathbf{R}_{\boldsymbol{\tau}} \otimes \mathbf{Z} '\right) \left( \boldsymbol{\mu} \otimes \mathbf{1}_{n^{\star}} \right) }{\sigma^2} \\
+%
+& \hspace{6mm} = \frac{\operatorname{vec}( \mathbf{Z}' \boldsymbol{\zeta} \mathbf{R}_{\boldsymbol{\tau}}' ) - \left( \mathbf{R}_{\boldsymbol{\tau}} \boldsymbol{\mu }\right) \otimes \left( \mathbf{Z}' \mathbf{1}_{n^{\star}} \right) }{\sigma^2}
+\end{align*}
+
+
+### Full conditional for $\phi$
+\begin{align*}
+\left[ \phi \middle| \cdot \right] \propto 
+\left[ \boldsymbol{\zeta}_i \middle| \boldsymbol{\mu}, \boldsymbol{\eta}^{\star}, \phi, \boldsymbol{\xi}, \boldsymbol{\tau}^2  \right] \left[ \phi \right] \\ 
+\propto \prod_{i=1}^N \operatorname{N}\left(\boldsymbol{\zeta}_i \middle| \boldsymbol{\mu} + \boldsymbol{\nu}_i, \sigma^2 \mathbf{I}\right) \times
+\operatorname{Uniform}\left( 0, 100 \right),
+\end{align*}
+which can be sampled using Metropolis-Hastings
+
+### Full conditional for $\boldsymbol{\xi}$
+\begin{align*}
+\left[ \boldsymbol{\xi} \middle| \cdot \right] \propto 
+\left[ \boldsymbol{\zeta}_i \middle| \boldsymbol{\mu}, \boldsymbol{\eta}^{\star}, \phi, \boldsymbol{\xi}, \boldsymbol{\tau}^2  \right] \left[ \boldsymbol{\xi} \right] \\ 
+\propto \prod_{i=1}^N \operatorname{N}\left(\boldsymbol{\zeta}_i \middle| \boldsymbol{\mu} + \mathbf{Z}_i \boldsymbol{\eta}^{\star} \mathbf{R}_{\boldsymbol{\tau}}, \sigma^2 \mathbf{I}\right) \times \prod_{b=1}^B \operatorname{Beta}\left(\xi_b \middle| \phi_b, \phi_b \right),  
+\end{align*}
+which can be sampled using Metropolis-Hastings
+
+### Full conditional for $\boldsymbol{\tau^2}$
+\begin{align*}
+\left[ \boldsymbol{\xi} \middle| \cdot \right] \propto 
+\left[ \boldsymbol{\zeta}_i \middle| \boldsymbol{\mu}, \boldsymbol{\eta}^{\star}, \phi, \boldsymbol{\xi}, \boldsymbol{\tau}^2  \right] \left[ \boldsymbol{\tau}^2 \right] \\ 
+\propto \prod_{i=1}^N \operatorname{N}\left(\boldsymbol{\zeta}_i \middle| \boldsymbol{\mu} + \mathbf{Z}_i \boldsymbol{\eta}^{\star} \mathbf{R}_{\boldsymbol{\tau}}, \sigma^2 \mathbf{I}\right) \times \prod_{j=1}^d \operatorname{Gamma}\left(\tau^2 \middle| 0.5, \sigma^2_{\tau^2_j} \right),  
+\end{align*}
+which can be sampled using Metropolis-Hastings
+
+
+## Fit the Full model
+This model took 3.6 hours running 4 mcmc chains in parallel on a 2017 iMac with 4.2GHz processor.
+
+
+```{r fitDM, echo=FALSE, message=FALSE, warning=FALSE, eval=TRUE}
+if (file.exists(here("/model-fit/fitDM.RData"))) {
+  ## Load MCMC run
+  load(here("/model-fit/fitDM.RData"))
+} else {
+  ##    
+  ## Long running MCMC
+  ##
+
+  ## Define parameters 
+  params <- list(n_adapt=n_adapt, n_mcmc=n_mcmc, n_thin=n_thin,
+                 X_knots=X_knots, message=message)
+  
+  ##
+  ## create wrapper function to call in parallel
+  ##
+  
+  parallelChains <- function (n_chains) {
+    ## compile the c++ code, this requires Rcpp to be installed
+    Rcpp::sourceCpp('~/mvgp/mcmc/mcmc-dirichlet-multinomial-mvgp.cpp')
+    # run the MCMC
+    out <- mcmc(mcmcRcpp(y[train, ], X[train], y[test, ],
+                         params, n_chain=n_chains, corr_function="exponential",
+                         file_name="model-fit/progress/DM-sim.txt"))
+    return(out)
+  }
+  
+  ## Initalize multicore using snowfall
+  sfInit(parallel=TRUE, cpus=4)
+  sfClusterSetupRNG()
+  sfExport("y", "X", "params", "train", "test")
+  sfLibrary(coda)
+  sfLibrary(here)
+  
+  
+  ## create progress file and start MCMC timing
+  ## 
+  file.create(here("model-fit/progress/DM-sim.txt"))
+  start <- Sys.time()
+  sink(here("/model-fit/progress/DM-sim.txt"))
+  print(paste("MCMC started at", start))
+  sink()
+  ## run MCMC  
+  out <- sfLapply(1:4, parallelChains)
+  
+  ## end timing
+  sink(here("/model-fit/progress/DM-sim.txt"), append = TRUE)
+  print(Sys.time() - start)
+  sink()
+
+  ## stop the computing cluster
+  sfStop()
+
+  save(out, X_knots, n_mcmc, n_thin, file=here("/model-fit/fitDM.RData"))
+}
+```
+
+
+
+```{r, eval=TRUE}
+## initialze posterior sample variables
+mu_post <- matrix(0, n_samples, d)
+eta_star_post <- array(0, dim=c(n_samples, n_knots, d))
+zeta_post <-  array(0, dim=c(n_samples, length(train), d))
+alpha_post <-  array(0, dim=c(n_samples, length(train), d))
+zeta_pred_post <-  array(0, dim=c(n_samples, length(test), d))
+alpha_pred_post <-  array(0, dim=c(n_samples, length(test), d))
+phi_post <- rep(0,  n_samples)
+tau2_post <- matrix(0,  n_samples, d)
+X_post <- matrix(0,  n_samples, length(test))
+xi_post <- array(0,  dim=c(n_samples, choose(d, 2)))
+R_post <- array(0, dim=c(n_samples, d, d))
+
+for(i in 1:n_chains){
+  mu_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$mu
+  eta_star_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$eta_star
+  zeta_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$zeta
+  alpha_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha
+  zeta_pred_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$zeta_pred
+  alpha_pred_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha_pred
+  phi_post[1:n_save + (i-1)*n_save] <- out[[i]]$phi
+  tau2_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$tau2
+  X_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$X
+  xi_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$xi
+  R_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$R
+}          
+```
+
+
+
+```{r, eval=TRUE}
+## convert to a CODA object
+out <- convert_to_coda(out)
+```
+
+
+
+```{r, eval=TRUE}
+## calculate convergence diagnostic
+Rhat <- make_gelman_rubin(out)
+layout(matrix(1:9, 3, 3))
+hist(Rhat[grepl("mu", names(Rhat))], main = "Rhat for mu")
+hist(Rhat[grepl("eta_star", names(Rhat))], main = "Rhat for eta_star")
+hist(Rhat[grepl("alpha", names(Rhat))], main = "Rhat for alpha")
+hist(Rhat[grepl("zeta", names(Rhat))], main = "Rhat for zeta")
+hist(Rhat[grepl("tau2", names(Rhat))], main = "Rhat for tau2")
+hist(Rhat[grepl("X", names(Rhat))], main = "Rhat for X")
+abline(h=1, col='red')
+hist(Rhat[grepl("xi", names(Rhat))], main = "Rhat for xi")
+hist(Rhat, main="All parameters")
+# Rhat[!is.finite(Rhat)] <- NA
+Rhat[grepl("phi", names(Rhat))]
+max(unlist(na.omit(Rhat)))
+```
+
+## capture MCMC diagnostics
+
+```{r}
+## MCMC diagnostics
+## disable the cat function to prevent RMarkdown output
+invisible(capture.output(
+  mcmcplot(out, dir=here("/model-fit/diagnostics/"), filename="dm-sim", 
+           extension="html", random=20)
+  ))
+```
+
+
+
+```{r, eval=TRUE}
+## 
+## Posterior trace plots
+##
+
+layout(matrix(1:9, 3, 3))
+matplot(mu_post, type = 'l')
+abline(h=mu, col='red', lwd=2)
+plot(phi_post, type='l')
+abline(h=phi, col='red', lwd=2)
+matplot(tau2_post, type='l')
+abline(h=tau^2)
+matplot(xi_post, type='l')
+abline(h=xi, col='red')
+matplot(eta_star_post[, , 1], type='l')
+# abline(h=eta_star[, 1], col='red', lwd=2)
+matplot(eta_star_post[, , 2], type='l')
+# abline(h=eta_star[, 2], col='red', lwd=2)
+matplot(eta_star_post[, , 3], type='l')
+# abline(h=eta_star[, 3], col='red', lwd=2)
+matplot(eta_star_post[, , 4], type='l')
+# abline(h=eta_star[, 4], col='red', lwd=2)
+matplot(X_post, type='l')
+abline(h=X[test])
+```
+
+
+
+
+```{r, eval=TRUE}
+layout(matrix(1:4, 2, 2))
+matplot(zeta_post[, 1, ], type='l')
+abline(h=zeta[1, ], col='red', lwd=2)
+matplot(zeta_post[, 2, ], type='l')
+abline(h=zeta[2, ], col='red', lwd=2)
+matplot(zeta_post[, 3, ], type='l')
+abline(h=zeta[3, ], col='red', lwd=2)
+matplot(zeta_post[, 4, ], type='l')
+abline(h=zeta[4, ], col='red', lwd=2)
+```
+
+
+
+```{r, eval=TRUE}
+layout(matrix(1:4, 2, 2))
+matplot(zeta_pred_post[, 1, ], type='l')
+matplot(zeta_pred_post[, 2, ], type='l')
+matplot(zeta_pred_post[, 3, ], type='l')
+matplot(zeta_pred_post[, 4, ], type='l')
+```
+
+
+```{r, eval=TRUE}
+layout(matrix(1:4, 2, 2))
+matplot(R_post[, , 1], type='l')
+abline(h=R[, 1])
+matplot(R_post[, , 2], type='l')
+abline(h=R[, 2])
+matplot(R_post[, , 3], type='l')
+abline(h=R[, 3])
+matplot(R_post[, , 4], type='l')
+abline(h=R[, 4])
+```
+
+
+
+
+```{r, eval=TRUE}
+layout(matrix(1:4, 2, 2))
+matplot(alpha_post[, 1, ], type='l')
+abline(h=alpha[1, ])
+matplot(alpha_post[, 2, ], type='l')
+abline(h=alpha[2, ])
+matplot(alpha_post[, 3, ], type='l')
+abline(h=alpha[3, ])
+matplot(alpha_post[, 4, ], type='l')
+abline(h=alpha[4, ])
+```
+
+
+
+```{r, eval=TRUE}
+layout(matrix(1:3, 3, 1))
+idx <- order(X[train])
+zeta_post_mean <- apply(zeta_post, c(2,3), mean)
+matplot(X[train][idx], zeta_post_mean[idx, ], type='l')
+matplot(X[train][idx], zeta[train, ][idx, ], type = 'l')
+matplot(X[train][idx], zeta_post_mean[idx, ] -
+          zeta[train, ][idx, ], type = 'l')
+```
+
+
+```{r}
+## sorted to increase
+idx <- order(X[test])
+X_ci <- apply(X_post[, idx], 2, sort)[(0.025*n_samples+1):(0.975*n_samples), ]
+sim.df <- data.frame(Covariate=c(X_ci),
+                     Observation=factor(rep((1:length(test)),
+                                            each=n_samples*0.95)),
+                     truth=rep(X[test][idx],
+                               each=n_samples*0.95))
+
+# png(file=here("/figures/dm-sim-predictions.png"), width=6, height=3,
+#     units="in", res=400)
+ggplot(sim.df, aes(Observation, Covariate)) +
+  geom_violin(position="identity") +
+  geom_point(aes(Observation, truth), color="red") +
+  scale_x_discrete(breaks=seq(0, length(test), 20)) + 
+  labs(x="Observation", y="Unobserved Covariate") + 
+  ggtitle("Predictive distribution for held-out observations")
+# dev.off()
+```
+
+
+```{r, eval=TRUE}
+Omega_post_mean <- matrix(0, d, d)
+for (i in 1:n_samples) {
+  Omega_post_mean <- Omega_post_mean + 
+    1/n_samples * t(R_post[i, , ]) %*% R_post[i, , ]
+}
+
+multiplot(ggcorr(data=NULL, cor_matrix=cov2cor(Sigma)) + 
+            ggtitle("Simulated Correlation"), 
+          ggcorr(data=NULL, cor_matrix=Omega_post_mean) + 
+            ggtitle("Estimated Mean of Correlation"), 
+          ggcorr(data=NULL, cor_matrix=Omega_post_mean-cov2cor(Sigma)) + 
+            ggtitle("Difference in Correlation"),
+          cols=1)
+```
+
+
+
+```{r}
+alpha_post_mean <- apply(alpha_post, c(2, 3), mean)
+zeta_post_mean <- apply(zeta_post, c(2, 3), mean)
+mu_post_mean <- apply(mu_post, 2, mean)
+p_alpha <- matrix(0, length(train), d)
+for (i in 1:(length(train))) {
+  p_alpha[i, ] <- exp(mu_post_mean + zeta_post_mean[i, ]) / sum(exp(mu_post_mean + zeta_post_mean[i, ]))
+  # p_alpha[i, ] <- alpha_post_mean[i, ] / sum(alpha_post_mean[i, ])
+}
+y_prop <- y
+for (i in 1:N) {
+  y_prop[i, ] <- y[i, ] / sum(y[i, ])
+}
+
+fitPlotData <- data.frame(species=as.factor(rep(1:d, each=length(train))), 
+                          count=c(y_prop[train, ]), 
+                          depth=rep(X[train], times=d),
+                          alpha=c(p_alpha))
+
+g1_post <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
+  geom_point(alpha=0.25) + theme(legend.position="none") +
+  ggtitle("Predictied functional response vs. depth") + 
+  geom_line(aes(x=depth, y=alpha, col = species), fitPlotData, lwd=1.25)
+
+g2_post <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
+  geom_point(alpha=0.25) + theme(legend.position="none") +
+  ggtitle("Predicted functional response vs. depth by species") + 
+  geom_line(aes(x=depth, y=alpha, col = species), fitPlotData, lwd=1.25) + 
+  facet_wrap( ~ species, ncol = 4)
+
+multiplot(g1_post, g2_post, gsim1, gsim2, cols=2)
+```
+
+
+## Fit GAM DM model
+This model took 36 minutes running 4 mcmc chains in parallel on a 2017 iMac with 4.2GHz processor.
+
+
+```{r fit-basis, echo=FALSE, message=FALSE, warning=FALSE, eval=TRUE}
+if (file.exists(here("/model-fit/fit-dm-basis.RData"))) {
+  ## Load MCMC run
+  load(here("/model-fit/fit-dm-basis.RData"))
+} else {
+  ##    
+  ## Long running MCMC
+  ##
+
+  ## Define parameters 
+  params <- list(n_adapt=n_adapt, n_mcmc=n_mcmc, n_thin=n_thin,
+                 degree=3, df=df, message=message)
+
+  parallelChains <- function (n_chains) {
+    Rcpp::sourceCpp(here('/mcmc/mcmc-dm-basis.cpp'))
+    out <- coda::mcmc(mcmcRcpp(y[train, ], X[train], y[test, ], 
+                               params, n_chain=n_chains, 
+                               file_name="model-fit/progress/DM-basis-sim.txt"))
+  }
+  
+  ## Initalize multicore
+  sfInit(parallel=TRUE, cpus=4)
+  sfClusterSetupRNG()
+  sfExport("y", "X", "params", "train", "test")
+  sfLibrary(coda)
+  sfLibrary(here)
+
+  ##
+  ## create progress file and start MCMC timing
+  ## 
+  
+  file.create(here("model-fit/progress/DM-basis-sim.txt"))
+  start <- Sys.time()
+  sink(here("/model-fit/progress/DM-basis-sim.txt"))
+  print(paste("MCMC started at", start))
+  sink()
+  
+  ## run MCMC  
+  out_gam <- sfLapply(1:4, parallelChains)
+  
+  ## end timing
+  sink(here("/model-fit/progress/DM-basis-sim.txt"), append = TRUE)
+  print(Sys.time() - start)
+  sink()
+
+  ## stop the snowfall cluster  
+  sfStop()
+    
+  save(out_gam, file=here("/model-fit/fit-dm-basis.RData"))
+}
+```
+
+
+```{r}
+## initialze posterior sample variables
+alpha_post_splines <- array(0, dim=c(n_samples, N-length(test), d))
+alpha_pred_post_splines <- array(0, dim=c(n_samples, length(test), d))
+beta_post_splines <- array(0, dim=c(n_samples, df, d))
+X_post_splines <- matrix(0,  n_samples, length(test))
+
+for(i in 1:n_chains){
+  alpha_post_splines[1:n_save + (i-1)*n_save, , ] <- out_gam[[i]]$alpha
+  alpha_pred_post_splines[1:n_save + (i-1)*n_save, , ] <- out_gam[[i]]$alpha_pred
+  beta_post_splines[1:n_save + (i-1)*n_save, , ] <- out_gam[[i]]$beta
+  X_post_splines[1:n_save + (i-1)*n_save, ] <- out_gam[[i]]$X
+} 
+```
+
+
+
+```{r, eval=TRUE}
+
+out_gam <- convert_to_coda(out_gam)
+```
+
+
+
+```{r, eval=TRUE}
+Rhat <- make_gelman_rubin(out_gam)
+layout(matrix(1:4, 2, 2))
+hist(Rhat[grepl("alpha", names(Rhat))], main = "Rhat for alpha")
+hist(Rhat[grepl("beta", names(Rhat))], main = "Rhat for beta")
+hist(Rhat[grepl("X", names(Rhat))], main = "Rhat for X")
+hist(Rhat, main="All parameters")
+max(unlist(na.omit(Rhat)))
+```
+
+
+## capture MCMC diagnostics
+
+```{r}
+## MCMC diagnostics
+## disable the cat function to prevent RMarkdown output
+invisible(capture.output(
+  mcmcplot(out_gam, dir=here("/model-fit/diagnostics/"), filename="dm-sim-basis", 
+           extension="html", random=20)
+  ))
+```
+
+
+
+```{r}
+## sorted to increase
+idx <- order(X[test])
+X_ci <- apply(X_post_splines[, idx], 2, sort)[(0.025*n_samples+1):(0.975*n_samples), ]
+sim.df <- data.frame(Covariate=c(X_ci),
+                     Observation=factor(rep((1:length(test)),
+                                            each=n_samples*0.95)),
+                     truth=rep(X[test][idx],
+                               each=n_samples*0.95))
+
+# png(file=here("/figures/dm-sim-gam-predictions.png"), width=6, height=3,
+#     units="in", res=400)
+ggplot(sim.df, aes(Observation, Covariate)) +
+  geom_violin(position="identity") +
+  geom_point(aes(Observation, truth), color="red") +
+  scale_x_discrete(breaks=seq(0, length(test), 20)) + 
+  labs(x="Observation", y="Unobserved Covariate") + 
+  ggtitle("Predictive distribution for held-out observations")
+# dev.off()
+```
+
+
+
+
+```{r}
+X_train <- X[train]
+X_test <- X[test]
+y_train <- y[train, ]
+y_train_prop <- y_train
+y_test <- y[test, ]
+y_test_prop <- y_test
+for (i in 1:length(train)) {
+  y_train_prop[i, ] <- y_train_prop[i, ] / sum(y_train_prop[i, ])
+}
+for (i in 1:length(test)) {
+  y_test_prop[i, ] <- y_test_prop[i, ] / sum(y_test_prop[i, ])
+}
+colnames(y_train_prop) <- letters[1:d]
+colnames(y_test_prop) <- letters[1:d]
+
+##
+## evaluate predictive ability
+##
+
+
+CRPS_MVGP <- makeCRPS(X_post, X_test, n_save)
+X_mean <- apply(X_post, 2, mean)
+MSPE_MVGP <- (X_mean - X_test)^2
+MAE_MVGP <- abs(apply(X_post, 2, median) -  X_test)
+X_025 <- apply(X_post, 2, quantile, prob = 0.025)
+X_975 <- apply(X_post, 2, quantile, prob = 0.975)
+coverage_MVGP <- (X_test >= X_025) & (X_test <= X_975)
+
+## Spline Model
+CRPS_splines <- makeCRPS(X_post_splines, X_test, n_save)
+X_mean_splines <- apply(X_post_splines, 2, mean)
+MSPE_splines <- (X_mean_splines - X_test)^2
+MAE_splines  <- abs(apply(X_post_splines, 2, median) - X_test)
+X_025_splines <- apply(X_post_splines, 2, quantile, prob = 0.025)
+X_975_splines <- apply(X_post_splines, 2, quantile, prob = 0.975)
+coverage_splines <- ( X_test >= X_025_splines) & ( X_test <= X_975_splines)
+
+
+##
+## WA reconstruction - subset to deal with all zero occurrence species
+##
+zeros_idx <- which(colSums(y_train_prop) == 0)
+if (length(zeros_idx) > 0) {
+  modWA <- rioja::WA(y_train_prop[, - zeros_idx], X_train)
+  predWA <- predict(modWA, y_test_prop[, - zeros_idx], sse=TRUE, nboot=1000)
+} else {
+  ## no data to subset
+  modWA <- rioja::WA(y_train_prop, X_train)
+  predWA <- predict(modWA, y_test_prop, sse=TRUE, nboot=1000)      
+}
+
+CRPS_WA <- makeCRPSGauss(predWA$fit[, 1], sqrt(predWA$v1.boot[, 1]), X_test)
+MAE_WA <- abs(predWA$fit[, 1] - X_test)
+MSPE_WA <- (predWA$fit[, 1] - X_test)^2
+coverage_WA <- 
+  (X_test >= (predWA$fit[, 1] - 2 * sqrt(predWA$v1.boot[, 1]^2 + 
+                                           predWA$v2.boot[1]^2))) & 
+  (X_test <= (predWA$fit[, 1] + 2 * sqrt(predWA$v1.boot[, 1]^2 + 
+                                           predWA$v2.boot[1]^2)))
+
+
+##
+## MLRC reconstruction - subset to deal with all zero occurrence species
+##
+
+zeros_idx <- which(colSums(y_train_prop) == 0)
+if (length(zeros_idx) > 0) {
+  modMLRC <- rioja::MLRC(y_train_prop[, - zeros_idx], X_train)
+  predMLRC <- predict(modMLRC, y_test_prop[, - zeros_idx],
+                      sse=TRUE, nboot=1000)
+} else {
+  modMLRC <- rioja::MLRC(y_train_prop, X_train)
+  predMLRC <- predict(modMLRC, y_test_prop, sse=TRUE, nboot=1000)
+}
+
+CRPS_MLRC <- makeCRPSGauss(predMLRC$fit[, 1], sqrt(predMLRC$v1.boot[, 1]),
+                      X_test)
+MSPE_MLRC <- (predMLRC$fit[, 1] - X_test)^2
+MAE_MLRC <- abs(predMLRC$fit[, 1] - X_test)
+coverage_MLRC <- 
+  ( X_test >= (predMLRC$fit[, 1] - 2 * sqrt(predMLRC$v1.boot[, 1]^2 + 
+                                              predMLRC$v2.boot[1]^2))) & 
+  (X_test <= (predMLRC$fit[, 1] + 2 * sqrt(predMLRC$v1.boot[, 1]^2 +
+                                             predMLRC$v2.boot[1]^2)))
+
+##
+## Random Forest
+##
+
+train_df <- data.frame(moisture=X_train, y_train)
+test_df <- data.frame(y_test)
+rf <- randomForest(moisture ~ ., data = train_df)
+
+CRPS_rf <- makeCRPS(t(matrix(predict(rf, test_df, predict.all=TRUE)$individual, 
+                          length(X_test), 500)), X_test, 500)
+MSPE_rf <- (predict(rf, test_df) - X_test)^2
+MAE_rf <- abs(predict(rf, test_df) - X_test)
+rf_CI <- t( apply( predict(rf, test_df, predict.all=TRUE)$individual, 1,
+                   function(x) {
+                     quantile(x, c(0.025,0.975))
+                   }))
+coverage_rf <- ( (X_test >= rf_CI[, 1]) & (X_test <= rf_CI[, 2]) )
+
+##
+## Modern analogue technique
+##
+
+modMAT <- rioja::MAT(as.data.frame(y_train), X_train, k=20, lean=FALSE)
+predMAT <- predict(modMAT, as.data.frame(y_test), k=10, sse=TRUE, n.boot=1000)
+CRPS_MAT <- makeCRPSGauss(
+  predMAT$fit.boot[, 2], 
+  sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2]), X_test)
+MSPE_MAT <- (  predMAT$fit.boot[, 2] - X_test)^2
+MAE_MAT <- abs( predMAT$fit.boot[, 2] - X_test)
+coverage_MAT <- 
+  ( X_test >=  predMAT$fit.boot[, 2] -
+      2 *  sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2])) & 
+  (X_test <=  predMAT$fit.boot[, 2] +
+      2 *  sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2]))
+
+```
+
+
+
+```{r}
+CRPS_out <- cbind(CRPS_MVGP, CRPS_splines, CRPS_WA, CRPS_MAT, CRPS_MLRC)
+MSPE_out <- cbind(MSPE_MVGP, MSPE_splines, MSPE_WA, MSPE_MAT, MSPE_MLRC)
+MAE_out <- cbind(MAE_MVGP, MAE_splines, MAE_WA, MAE_MAT, MAE_MLRC)
+coverage_out <- cbind(coverage_MVGP, coverage_splines, coverage_WA, 
+                      coverage_MAT, coverage_MLRC)
+colnames(CRPS_out) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
+colnames(MAE_out) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
+colnames(MSPE_out) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
+colnames(coverage_out) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
+
+CRPS <- data.frame(t(apply(CRPS_out, 2, mean)))
+MSPE <- data.frame(t(apply(MSPE_out, 2, mean)))
+MAE <- data.frame(t(apply(MAE_out, 2, mean)))
+coverage <- data.frame(100/(length(test))*t(apply(coverage_out, 2, sum)))
+
+sim_results <- rbind(CRPS, MSPE, MAE, coverage)
+rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage rates")
+print(xtable(sim_results, digits=4), 
+      file=here("/results/sim-dm.tex"),
+      floating=FALSE)
+```
+
+```{r}
+kable(sim_results)
+```
