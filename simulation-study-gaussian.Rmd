@@ -1,26 +1,9 @@
 ---
 title: "Multivariate Gaussian Process"
 author: "John Tipton"
-date: "July 27, 2016"
-output:
-  html_document: default
-  pdf_document:
-    dev: pdf
-    fig_caption: yes
-    includes:
-      in_header: header.tex
-    keep_tex: yes
-    number_section: yes
-    template: myTemplate.tex
-geometry: margin=1in
-csl: apa.csl
-bibliography: multivariate-gaussian-process.bib
+date: "\today"
+output: html_document  
 ---
-
-## To Do
-- figure out convergence issue with mu and eta_star
-
-## Model
 
 
 ```{r setup, tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=6, include=FALSE, eval=TRUE}
@@ -28,7 +11,6 @@ set.seed(101)
 library(knitr)
 library(mvnfast)
 library(ggplot2)
-library(ggmcmc)
 library(Matrix)
 library(fields)
 library(MCMCpack)
@@ -42,75 +24,85 @@ library(data.table)
 library(reshape2)
 library(randomForest)
 library(GGally)
-library(DirichletReg)
 library(gridExtra)
+library(here)
 
-source("~/functions/multiplot.R")
+##
+## source functions used in the code below
+##
 
-# n_adapt <- 10
-# n_burn <- 10
-# n_mcmc <- 10
-# n_thin <- 1
-n_adapt <- 100000
-n_mcmc <- 100000
+## simulate the cholesky of the correlation matrix
+source(here("functions", "make-lkj.R"))
+
+## simulate the correlation matrix
+source(here("functions", "make-correlation-matrix.R"))
+
+## layout multiple ggplot objects in one plot
+source(here("functions", "multiplot.R"))
+
+## load function to convert MCMC output to CODA object for diagnostics
+source(here("functions", "convert-to-coda.R"))
+
+## load Gelman-Rubin diagnostic for lack of convergence
+source(here("functions", "make_gelman_rubin.R"))
+
+## evaluate a probabilistic predictive distribution using CRPS score
+Rcpp::sourceCpp(here("functions", "makeCRPS.cpp"))
+
+## evaluate a Gaussian predictive distribution summarized by mean and 
+## standard deviation using CRPS score
+source(here("functions", "makeCRPSGauss.R"))
+
+
+##
+## Setup MCMC parameters
+##
+
+n_adapt <- 150000
+n_mcmc <- 150000
 n_thin <- 100
 n_chains <- 4
-n_save <- n_mcmc / n_thin
-n_samples <- n_chains * n_save
+## B-spline degrees of freedom parameter
 df <- 6
 degree <- 3
+n_save <- n_mcmc / n_thin
+n_samples <- n_chains * n_save
+## Output MCMC progress modlulo every 'message' iterations
 message <- 1000
 
-  
-if (!dir.exists("./figures/")) {
-  dir.create("./figures/")
-}
-if (!dir.exists("./progress/cross-validate/")) {
-  dir.create("./progress/cross-validate/")
-}
-if (!dir.exists("./progress/")) {
-  dir.create("./progress/")
-}
-if (!dir.exists("./model-fit/")) {
-  dir.create("./model-fit/")
-}
+## currently can choose exponential or gaussian covariance function
+corr_function <- "exponential"
 ```
 
 ```{r simulation, tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=6, include=FALSE, eval=TRUE}
 set.seed(141)
+## number of sites from which to simulate
 N <- 1000
-N_obs <- N - 50
-d <- 4#20
 
-source("~/mcmcExample/multinomial-probit-regression/make-lkj.R")
-eta <- 1
-eta_vec <- rep(0, choose(d, 2))
-idx_eta <- 0
-for (j in 1:d) {
-  for (k in 1:(d-j)) {
-    eta_vec[idx_eta + k] <- eta + (d - 1 - j) / 2
-  }
-  idx_eta <- idx_eta + d-j
-}
-xi <- rep(0, choose(d, 2))
-for (i in 1:choose(d, 2)) {
-  xi[i] <- 2 * rbeta(1, eta_vec[i], eta_vec[i]) - 1
-}
-# xi <- rep(0, choose(d, 2))
-# for (i in 1:choose(d, 2)) {
-#   xi[i] <- 2 * rbeta(1, eta_vec[i], eta_vec[i]) - 1
-# }
+## number of hold-out sites to use for reconstruction
+N_obs <- N - 200
+## index for the training dataset
+train <- 1:N_obs
+## index for the test dataset
+test <- (N_obs+1):N
+## number of "species"
+d <- 8
 
-R <- makeLKJ(xi, d, cholesky = TRUE)
+corr_out <- make_correlation_matrix(d, eta = 1)
+R <- corr_out$R
+xi <- corr_out$xi
+
+## simulate the marginal variances
 tau <- rgamma(d, 5, 5)
-# tau <- c(1, rgamma(d-1, 1, 1))
 R_tau <- R %*% diag(tau)
 Sigma <- t(R_tau) %*% R_tau
 
 mu <- rnorm(d, 0, 10)
-X <- rnorm(N, 0, 20)
-sigma2 <- 1#0.125
-phi <- 15
+X <- rnorm(N, 0, 1)
+X_train <- X
+X_train[test] <- NA
+sigma2 <- 1
+phi <- 1.25
 epsilon <- matrix(rnorm(N*d, 0, sqrt(sigma2)), N, d)
 
 ##
@@ -127,7 +119,6 @@ epsilon <- matrix(rnorm(N*d, 0, sqrt(sigma2)), N, d)
 
 n_knots <- 30
 X_knots <- seq(min(X), max(X), length=n_knots)
-# X_knots <- seq(min(X)-1.25*sd(X), max(X)+1.25*sd(X), length=n_knots)
 D_knots <- as.matrix(dist(X_knots))               ## distance among knots
 D_interpolate <- as.matrix(rdist(X, X_knots))     ## distance from observed 
                                                   ## locations to knots
@@ -144,14 +135,10 @@ y <- t(mu + t(zeta)) + epsilon
 
 
 ```{r}
-simPlotData <- data.frame(species=as.factor(rep(1:4, each=N)), 
+simPlotData <- data.frame(species=as.factor(rep(1:d, each=N)), 
                           response=c(y), 
                           covariate=rep(X, times=d), 
                           zeta=c(t(mu + t(zeta))))
-# simPlotData <- data.frame(species=as.factor(rep(1:4, each=N)), 
-#                           response=c(y[, c(1, 5, 10, 16)]), 
-#                           covariate=rep(X, times=d), 
-#                           zeta=c(t(mu + t(zeta))[, c(1, 5, 10, 16)]))
 
 gsim1 <- ggplot(simPlotData, aes(x=covariate, y=response, color=species, group=species)) + 
   geom_point(alpha=0.25) + theme(legend.position="none") +
@@ -165,19 +152,18 @@ gsim2 <- ggplot(simPlotData, aes(x=covariate, y=response, color=species, group=s
   facet_wrap( ~ species, ncol = 2) + 
   theme(axis.text.x=element_blank(), axis.text.y=element_blank(),
         axis.ticks.x=element_blank(), axis.ticks.y=element_blank())
-# source("~/functions/multiplot.R")
-# png(file="~/mvgp/figures/simulation.png",
-#     width=6, height=3, units="in", res=400)
-multiplot(gsim1, gsim2, cols=2)
-# dev.off()
 
+multiplot(gsim1, gsim2, cols=2)
 ```
-<!-- ![](~/mvgp/figures/simulation.png) -->
+
+
+## Fit the Gaussian Likelihood model
+This model took 1.21 hours running 4 mcmc chains in parallel on a 2017 iMac with 4.2GHz processor.
 
 ```{r fitSim, echo=FALSE, message=FALSE, warning=FALSE, eval=TRUE}
-if (file.exists("~/mvgp/model-fit/fitSim.RData")) {
+if (file.exists(here("model-fit", "fitSim.RData"))) {
   ## Load MCMC run
-  load("~/mvgp/model-fit/fitSim.RData")
+  load(here("model-fit", "fitSim.RData"))
 } else {
   
   ## 
@@ -187,35 +173,41 @@ if (file.exists("~/mvgp/model-fit/fitSim.RData")) {
   ## Define parameters 
   params <- list(n_adapt=n_adapt, n_mcmc=n_mcmc,
                  n_thin=n_thin, N_obs=N_obs, X_knots=X_knots, 
-                 message=message, 
-                 mu=mu, tau2=tau^2, xi=xi, eta_star=eta_star, phi=phi, sigma2=sigma2, 
-                 sample_mu=TRUE, sample_mu_mh=FALSE, 
-                 sample_tau2=TRUE, sample_xi=TRUE,
-                 sample_eta_star=TRUE, sample_eta_star_mh=FALSE,
-                 sample_phi=TRUE, sample_sigma2=TRUE, 
-                 sample_X=TRUE, sample_X_mh=FALSE)
+                 message=message)
   
   parallelChains <- function (n_chains) {
-    Rcpp::sourceCpp('~/mvgp/mcmc/mcmc-mvgp.cpp')
+    Rcpp::sourceCpp(here("mcmc", "mcmc-mvgp.cpp"))
     out <- mcmc(mcmcRcpp(y, X, params, n_chain=n_chains, 
-                         file_name="progress/sim-fit.txt", 
+                         file_name=here("model-fit", "progress", "sim-fit.txt"), 
                          corr_function="exponential"))
   }
   
   ## Initalize multicore
   sfInit(parallel=TRUE, cpus=4)
   sfClusterSetupRNG()
-  sfExport("y", "X", "params", "phi")
+  sfExport("y", "X", "params")
   sfLibrary(coda)
+  sfLibrary(here)
   
-  ## create temporary progress file  
-  file.create("./progress/sim-fit.txt")
-  
+  ## create temporary progress file and start timing
+  file.create(here("model-fit", "progress", "sim-fit.txt"))
+    start <- Sys.time()
+  sink(here("model-fit", "progress", "sim-fit.txt"))
+  print(paste("MCMC started at", start))
+  sink()
+
+  ## run MCMC
   out <- sfLapply(1:4, parallelChains)
   
+  ## end timing
+  sink(here("model-fit", "progress", "sim-fit.txt"), append = TRUE)
+  print(Sys.time() - start)
+  sink()
+  
+  ## stop the computing cluster
   sfStop()
 
-  save(out, X_knots, file="~/mvgp/model-fit/fitSim.RData")
+  save(out, X_knots, file=here("model-fit", "fitSim.RData"))
 }
 
 ```
@@ -251,27 +243,22 @@ for(i in 1:n_chains){
 
 
 ```{r, eval=TRUE}
-source("~/mvgp/functions/convert-to-coda.R")
 out <- convert_to_coda(out)
 ```
 
 
 
 ```{r}
-source("~/mvgp/nimble/functions/make_gelman_rubin.R")
 Rhat <- make_gelman_rubin(out)
 layout(matrix(1:9, 3, 3))
 hist(Rhat[grepl("mu", names(Rhat))], main = "Rhat for mu")
 hist(Rhat[grepl("eta_star", names(Rhat))], main = "Rhat for eta_star")
 hist(Rhat[grepl("zeta", names(Rhat))], main = "Rhat for zeta")
-# hist(Rhat[grepl("epsilon", names(Rhat))], main = "Rhat for epsilon")
 hist(Rhat[grepl("tau2", names(Rhat))], main = "Rhat for tau2")
-# hist(Rhat[grepl("X", names(Rhat))], main = "Rhat for X")
 plot(Rhat[grepl("phi", names(Rhat))], main = "Rhat for phi")
 abline(h=1, col='red')
 hist(Rhat[grepl("xi", names(Rhat))], main = "Rhat for xi")
 hist(Rhat, main="All parameters")
-Rhat[!is.finite(Rhat)] <- NA
 Rhat[grepl("phi", names(Rhat))]
 max(unlist(na.omit(Rhat)))
 ```
@@ -349,31 +336,19 @@ matplot(X[idx], zeta_post_mean[idx, ] - zeta[idx, ], type = 'l')
 
 
 ```{r, eval=TRUE}
-layout(matrix(1, 1, 1))
-matplot(apply(X_post, 2, mean), type='l',
-        ylim=c(-50, 50))
-matplot(apply(X_post, 2, quantile, prob = 0.025), 
-        type='l', add=TRUE, lty=2)
-matplot(apply(X_post, 2, quantile, prob = 0.975), 
-        type='l', add=TRUE, lty=2)
-# matplot(t(X_post), type='l',
-#         col=adjustcolor('black', alpha.f=0.025),
-#         main=paste("X acceptance ", round(mean(X_accept), digits=3)))
-lines(X[(N_obs+1):N], col = 'red')
-# lines(apply(out$X[(n_mcmc/2+1):n_mcmc, ], 2, mean), col='blue')
-```
-
-```{r, eval=TRUE}
 Omega_post_mean <- matrix(0, d, d)
 for (i in 1:n_samples) {
   Omega_post_mean <- Omega_post_mean + 
     1/n_samples * t(R_post[i, , ]) %*% R_post[i, , ]
 }
 
-multiplot(ggcorr(data=NULL, cor_matrix=cov2cor(Sigma)), 
-          ggcorr(data=NULL, cor_matrix=Omega_post_mean), 
-          ggcorr(data=NULL, cor_matrix=Omega_post_mean-cov2cor(Sigma)),
-          cols=3)
+multiplot(ggcorr(data=NULL, cor_matrix=cov2cor(Sigma)) + 
+            ggtitle("Simulated Correlations"), 
+          ggcorr(data=NULL, cor_matrix=Omega_post_mean) + 
+            ggtitle("Posterior Mean Correlations"),
+          ggcorr(data=NULL, cor_matrix=Omega_post_mean-cov2cor(Sigma)) + 
+            ggtitle("Estimation Error for Correlations"),
+          cols=1)
 ```
 
 
@@ -384,7 +359,6 @@ zeta_post_mean <- apply(zeta_post, c(2, 3), mean)
 p_alpha <- matrix(0, N, d)
 for (i in 1:N) {
   p_alpha[i, ] <- mu_post_mean + zeta_post_mean[i, ]
-  # p_alpha[i, ] <- alpha_post_mean[i, ] / sum(alpha_post_mean[i, ])
 }
 
 fitPlotData <- data.frame(species=as.factor(rep(1:d, each=N_obs)), count=c(y[1:N_obs, ]), 
@@ -392,25 +366,28 @@ fitPlotData <- data.frame(species=as.factor(rep(1:d, each=N_obs)), count=c(y[1:N
 
 g1_post <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
   geom_point(alpha=0.25) + theme(legend.position="none") +
-  ggtitle("MVGP vs. depth") + 
+  ggtitle("Estimated Functional response vs.covariate") + 
   geom_line(aes(x=depth, y=alpha, col = species), fitPlotData, lwd=1.25)
 
 g2_post <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
   geom_point(alpha=0.25) + theme(legend.position="none") +
-  ggtitle("MVGP vs. depth by species") + 
+  ggtitle("Estimated Functional response vs.covariateby species") + 
   geom_line(aes(x=depth, y=alpha, col = species), fitPlotData, lwd=1.25) + 
   facet_wrap( ~ species, ncol = 2)
-source("~/functions/multiplot.R")
+
 multiplot(g1_post, g2_post, gsim1, gsim2, cols=2)
 ```
 
 
 
 
+## Fit the Gaussian Likelihood B-spline model
+This model took 15.6 minutes running 4 mcmc chains in parallel on a 2017 iMac with 4.2GHz processor.
+
 ```{r fitSplineSim, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE, eval=TRUE}
-if (file.exists("~/mvgp/model-fit/fit-gaussian-gam.RData")) {
+if (file.exists(here("model-fit", "fit-gaussian-gam.RData"))) {
   ## Load MCMC run
-  load("~/mvgp/model-fit/fit-gaussian-gam.RData")
+  load(here("model-fit", "fit-gaussian-gam.RData"))
 } else {
   ##
   ## Long running MCMC
@@ -424,9 +401,9 @@ if (file.exists("~/mvgp/model-fit/fit-gaussian-gam.RData")) {
   ## Fit MCMC model
   parallelChains <- function (n_chains) {
     # Rcpp::sourceCpp('~/mvgp/mcmc/mcmc-basis-missing-covariate-ess.cpp')
-    Rcpp::sourceCpp('~/mvgp/mcmc/mcmc-gam.cpp')
+    Rcpp::sourceCpp(here("mcmc", "mcmc-gam.cpp"))
     out <- mcmc( mcmcRcpp(y, X, params, n_chain=n_chains,
-                          file_name="progress/sim-gam.txt"))
+                          file_name=here("model-fit", "progress", "sim-gam.txt")))
   }
 
   ## Initalize multicore
@@ -434,16 +411,30 @@ if (file.exists("~/mvgp/model-fit/fit-gaussian-gam.RData")) {
   sfClusterSetupRNG()
   sfExport("y", "X", "params")
   sfLibrary(coda)
+  sfLibrary(here)
 
   ## create temporary progress file
-  file.create("./progress/sim-gam.txt")
+  file.create(here("model-fit", "progress", "sim-gam.txt"))
+ 
+  ## create temporary progress file and start timing
+  file.create(here("model-fit", "progress", "sim-gam.txt"))
+    start <- Sys.time()
+  sink(here("model-fit", "progress", "sim-gam.txt"))
+  print(paste("MCMC started at", start))
+  sink()
 
   ## run MCMC
   out_splines <- sfLapply(1:4, parallelChains)
-
+  
+  ## end timing
+  sink(here("model-fit", "progress", "sim-gam.txt"), append = TRUE)
+  print(Sys.time() - start)
+  sink()
+  
+  ## stop the computing cluster
   sfStop()
-
-  save(out_splines, file="~/mvgp/model-fit/fit-gaussian-gam.RData")
+  
+  save(out_splines, file=here("model-fit", "fit-gaussian-gam.RData"))
 }
 ```
 
@@ -465,14 +456,12 @@ for(i in 1:n_chains){
 
 
 ```{r, eval=TRUE}
-source("~/mvgp/functions/convert-to-coda.R")
 out_splines <- convert_to_coda(out_splines)
 ```
 
 
 
 ```{r, eval=TRUE}
-source("~/mvgp/nimble/functions/make_gelman_rubin.R")
 Rhat_splines <- make_gelman_rubin(out_splines)
 layout(matrix(1:6, 3, 2))
 hist(Rhat_splines[grepl("alpha", names(Rhat_splines))], main = "Rhat for alpha")
@@ -480,7 +469,6 @@ hist(Rhat_splines[grepl("beta", names(Rhat_splines))], main = "Rhat for beta")
 hist(Rhat_splines[grepl("sigma2", names(Rhat_splines))], main = "Rhat for sigma2")
 hist(Rhat_splines[grepl("X", names(Rhat_splines))], main = "Rhat for X")
 hist(Rhat_splines, main="All parameters")
-Rhat_splines[!is.finite(Rhat_splines)] <- NA
 max(unlist(na.omit(Rhat_splines)))
 ```
 
@@ -490,7 +478,6 @@ max(unlist(na.omit(Rhat_splines)))
 ## evaluate predictive ability
 ##
 
-Rcpp::sourceCpp("~/testate/functions/makeCRPS.cpp")
 CRPS_MVGP <- makeCRPS(X_post, X[(N_obs+1):N], n_save)
 X_mean <- apply(X_post, 2, mean)
 MSPE_MVGP <- (X_mean -  X[(N_obs+1):N])^2
@@ -500,7 +487,6 @@ X_975 <- apply(X_post, 2, quantile, prob = 0.975)
 coverage_MVGP <- ( X[(N_obs+1):N] >= X_025) & ( X[(N_obs+1):N] <= X_975)
 
 ## Spline Model
-Rcpp::sourceCpp("~/testate/functions/makeCRPS.cpp")
 CRPS_splines <- makeCRPS(X_post_splines, X[(N_obs+1):N], n_save)
 X_mean_splines <- apply(X_post_splines, 2, mean)
 MSPE_splines <- (X_mean_splines -  X[(N_obs+1):N])^2
@@ -511,7 +497,6 @@ coverage_splines <- ( X[(N_obs+1):N] >= X_025_splines) & ( X[(N_obs+1):N] <= X_9
 
 
 ## Random Forest
-
 train <- data.frame(moisture=X[1:N_obs], y[1:N_obs, ])
 test <- data.frame(y[(N_obs+1):N, ])
 rf <- randomForest(moisture ~ ., data = train)
@@ -550,7 +535,7 @@ coverage <- data.frame(100/(N-N_obs)*t(apply(coverage_out, 2, sum)))
 
 sim_results <- rbind(CRPS, MSPE, MAE, coverage)
 rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage rates")
-print(xtable(sim_results, digits=4), file="results/sim-gaussian.tex",
+print(xtable(sim_results, digits=4), file=here("results", "sim-gaussian.tex"),
       floating=FALSE)
 ```
 

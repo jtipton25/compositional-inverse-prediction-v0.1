@@ -104,11 +104,11 @@ Rcpp::List ess_eta_star (const arma::mat& eta_star_current,
     } else if (phi_angle < 0.0) {
       phi_angle_min = phi_angle;
     } else {
-      Rprintf("Bug detected - ESS for X shrunk to current position and still not acceptable n");
+      Rprintf("Bug detected - ESS for X shrunk to current position and still not acceptable \n");
       // set up output messages
       std::ofstream file_out;
       file_out.open(file_name, std::ios_base::app);
-      file_out << "Bug - ESS for X shrunk to current position on chain " << n_chain << "n";
+      file_out << "Bug - ESS for X shrunk to current position on chain " << n_chain << "\n";
       // close output file
       file_out.close();
     }
@@ -199,11 +199,11 @@ Rcpp::List ess_X (const double& X_current, const double& X_prior,
     } else if (phi_angle < 0.0) {
       phi_angle_min = phi_angle;
     } else {
-      Rprintf("Bug detected - ESS for X shrunk to current position and still not acceptable n");
+      Rprintf("Bug detected - ESS for X shrunk to current position and still not acceptable \n");
       // set up output messages
       std::ofstream file_out;
       file_out.open(file_name, std::ios_base::app);
-      file_out << "Bug - ESS for X shrunk to current position on chain " << n_chain << "n";
+      file_out << "Bug - ESS for X shrunk to current position on chain " << n_chain << "\n";
       // close output file
       file_out.close();
     }
@@ -231,6 +231,11 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
   int n_mcmc = as<int>(params["n_mcmc"]);
   int N_obs = as<int>(params["N_obs"]);
   int n_thin = as<int>(params["n_thin"]);
+  
+  int n_warmup = 500;
+  if (params.containsElementNamed("n_warmup")) {
+    n_warmup = as<double>(params["n_warmup"]);
+  }
   
   // set up dimensions
   double N = Y.n_rows;
@@ -391,7 +396,7 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
   for (int i=0; i<N; i++) {
     mu_mat.row(i) = mu.t();
   }
-  
+
   //
   // Default for Gaussian process range parameter phi
   //
@@ -404,7 +409,7 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
   if (params.containsElementNamed("sample_phi")) {
     sample_phi = as<bool>(params["sample_phi"]);
   }
-  
+
   //
   // Regression error parameter sigma2
   //
@@ -427,9 +432,9 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
   arma::vec lambda_tau2(d);
   arma::vec tau2(d);
   for (int j=0; j<d; j++) {
-    // lambda_tau2(j) = R::rgamma(0.5, 1.0 / s2_tau2);
-    // tau2(j) = std::max(std::min(R::rgamma(0.5, 1.0 / lambda_tau2(j)), 5.0), 1.0);
-    tau2(j) = std::max(std::min(R::rgamma(0.5, 1.0), 5.0), 1.0);
+    lambda_tau2(j) = std::max(std::min(R::rgamma(0.5, 1.0 / s2_tau2), 5.0), 1.0);
+    tau2(j) = std::max(std::min(R::rgamma(0.5, 1.0 / lambda_tau2(j)), 5.0), 1.0);
+    // tau2(j) = std::max(std::min(R::rgamma(0.5, 1.0), 5.0), 1.0);
   }
   arma::vec tau = sqrt(tau2);
   if (params.containsElementNamed("tau2")) {
@@ -532,9 +537,9 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
   double phi_accept_batch = 0.0;
   double sigma2_accept = 0.0;
   double sigma2_accept_batch = 0.0;
-  // double s2_tau2_accept = 0.0;
-  // double s2_tau2_accept_batch = 0.0;
-  // double s2_tau2_tune = 1.0;
+  double s2_tau2_accept = 0.0;
+  double s2_tau2_accept_batch = 0.0;
+  double s2_tau2_tune = 1.0;
   arma::vec X_tune(N-N_obs, arma::fill::ones);
   X_tune *= X_tune_tmp;
   arma::vec X_accept(N-N_obs, arma::fill::zeros);
@@ -564,26 +569,408 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
     Sigma_eta_star_tune_chol.slice(j) = chol(Sigma_eta_star_tune.slice(j));
   }
   
+  // Rcout << "mu = " << mu << "\n";
+  // Rcout << "phi = " << phi << "\n";
+  // Rcout << "tau2 = " << tau2 << "\n";
+  // Rcout << "tau = " << tau << "\n";
+  // Rcout << "lamdba_tau2 = " << lambda_tau2 << "\n";
+  // Rcout << "s2_tau2 = " << s2_tau2 << "\n";
+  // Rcout << "sigma2 = " << sigma2 << "\n";
+  // Rcout << "sigma = " << sigma << "\n";
+  // Rcout << "lambda_sigma2 = " << lambda_sigma2 << "\n";
+  // Rcout << "s2_sigma2 = " << s2_sigma2 << "\n";
+  // Rcout << "eta_star = " << eta_star << "\n";
+  // Rcout << "zeta = "<< zeta << "\n";
   
-  Rprintf("Starting MCMC adaptation for chain %d, running for %d iterations n", 
-          n_chain, n_adapt);
+  
+  // Start warmup to avoid getting stuck in ESS sampler
+  
+  Rprintf("Starting MCMC warmup for chain %d, running for %d iterations \n", 
+          n_chain, n_warmup);
   // set up output messages
   std::ofstream file_out;
   file_out.open(file_name, std::ios_base::app);
+  file_out << "Starting MCMC warmup for chain " << n_chain <<
+    ", running for " << n_warmup << " iterations \n";
+  // close output file
+  file_out.close(); 
+  
+  // Initial warmup stage
+  for (int k=0; k<n_warmup; k++) {
+    if ((k+1) % message == 0) {
+      Rprintf("MCMC warmup Iteration %d \n", k+1);
+      // set up output messages
+      std::ofstream file_out;
+      file_out.open(file_name, std::ios_base::app);
+      file_out << "MCMC warmup Iteration " << k+1 << " for chain " <<
+        n_chain << "\n";
+      // close output file
+      file_out.close(); 
+    }
+    
+    Rcpp::checkUserInterrupt();
+    
+    //
+    // sample mu 
+    //
+    
+    if (sample_mu) {
+      if (sample_mu_mh) {
+        // sample using MH
+        arma::vec mu_star = mvrnormArmaVecChol(mu, lambda_mu_tune * Sigma_mu_tune_chol);
+        arma::mat mu_mat_star(N, d);
+        for (int i=0; i<N; i++) {
+          mu_mat_star.row(i) = mu_star.t();
+        }
+        double mh1 = - 0.5 * as_scalar(accu(pow(Y - mu_mat_star - zeta, 2)) / sigma2);
+        double mh2 = - 0.5 * as_scalar(accu(pow(Y - mu_mat - zeta, 2)) / sigma2);
+        for (int j=0; j<d; j++) {
+          mh1 += R::dnorm(mu_star(j), mu_mu, s_mu, true);
+          mh2 += R::dnorm(mu(j), mu_mu, s_mu, true);
+        }
+        double mh = exp(mh1-mh2);
+        if (mh > R::runif(0.0, 1.0)) {
+          mu = mu_star;
+          mu_mat = mu_mat_star;
+          mu_accept_batch += 1.0 / 50;
+        }
+        mu_batch.row(k % 50) = mu.t();
+        // update tuning
+        if ((k+1) % 50 == 0){
+          updateTuningMV(k, mu_accept_batch, lambda_mu_tune, mu_batch,
+                         Sigma_mu_tune, Sigma_mu_tune_chol);    
+        }
+      } else {
+        // sample mu using Gibbs
+        arma::mat A = N * I_d / sigma2 + I_d / s2_mu;
+        arma::vec b = colSums(Y - zeta) / sigma2 + mu_mu * ones_d / s2_mu;
+        mu = rMVNArma(A, b);
+        for (int i=0; i<N; i++) {
+          mu_mat.row(i) = mu.t();
+        }
+      }
+    }
+    
+    //
+    // sample phi
+    //
+    
+    if (sample_phi) {
+      double phi_star = phi + R::rnorm(0.0, phi_tune);
+      if (phi_star > phi_L && phi_star < phi_U) {
+        arma::mat C_star = exp(- D_knots / phi_star);
+        arma::mat C_chol_star = chol(C_star);
+        arma::mat C_inv_star = inv_sympd(C_star);
+        arma::mat c_star = exp(- D / phi_star);
+        arma::mat Z_star = c_star * C_inv_star;
+        arma::mat zeta_star = Z_star * eta_star * R_tau;
+        double mh1 = 0.0 -  // uniform prior
+          0.5 * as_scalar(accu(pow(Y - mu_mat - zeta_star, 2)) / sigma2);
+        double mh2 = 0.0 -  // uniform prior
+          0.5 * as_scalar(accu(pow(Y - mu_mat - zeta, 2)) / sigma2);
+        for (int j=0; j<d; j++) {
+          mh1 += dMVNChol(eta_star.col(j), zero_knots, C_chol_star, true);
+          mh2 += dMVNChol(eta_star.col(j), zero_knots, C_chol, true);
+        }
+        double mh = exp(mh1-mh2);
+        if (mh > R::runif(0.0, 1.0)) {
+          phi = phi_star;
+          C = C_star;
+          C_chol = C_chol_star;
+          C_inv = C_inv_star;
+          c = c_star;
+          Z = Z_star;
+          zeta = zeta_star;
+          phi_accept_batch += 1.0 / 50.0;
+        }
+      }
+      // update tuning
+      if ((k+1) % 50 == 0){
+        updateTuning(k, phi_accept_batch, phi_tune);
+      }
+    }
+    
+    //
+    // sample eta_star - MH
+    //
+    
+    if (sample_eta_star) {
+      // if (sample_eta_star_mh) {
+        for (int j=0; j<d; j++) {
+          arma::mat eta_star_star = eta_star;
+          eta_star_star.col(j) +=
+            mvrnormArmaVecChol(zero_knots,
+                               lambda_eta_star_tune(j) * Sigma_eta_star_tune_chol.slice(j));
+          arma::mat zeta_star = Z * eta_star_star * R_tau;
+          double mh1 = dMVNChol(eta_star_star.col(j), zero_knots, C_chol, true) -
+            0.5 * as_scalar(accu(pow(Y - mu_mat - zeta_star, 2.0)) / sigma2);
+          double mh2 = dMVNChol(eta_star.col(j), zero_knots, C_chol, true) -
+            0.5 * as_scalar(accu(pow(Y - mu_mat - zeta, 2.0)) / sigma2);
+          double mh = exp(mh1-mh2);
+          if (mh > R::runif(0.0, 1.0)) {
+            eta_star = eta_star_star;
+            zeta = zeta_star;
+            eta_star_accept_batch(j) += 1.0 / 50;
+          }
+        }
+        // update tuning
+        eta_star_batch.subcube(k % 50, 0, 0, k % 50, N_knots-1, d-1) = eta_star;
+        // update tuning
+        if ((k+1) % 50 == 0){
+          updateTuningMVMat(k, eta_star_accept_batch, lambda_eta_star_tune,
+                            eta_star_batch, Sigma_eta_star_tune,
+                            Sigma_eta_star_tune_chol);
+        }
+      // } else {
+      //   // elliptical slice sampler
+      //   for (int j=0; j<d; j++) {
+      //     arma::vec eta_star_prior = mvrnormArmaVecChol(zero_knots, C_chol);
+      //     Rcpp::List ess_eta_star_out = ess_eta_star(eta_star,  eta_star_prior, 
+      //                                                Y, mu_mat, zeta, R_tau, Z, 
+      //                                                sigma2, N_obs, N, d, j, 
+      //                                                file_name, n_chain);
+      //     eta_star = as<mat>(ess_eta_star_out["eta_star"]);
+      //     zeta = as<mat>(ess_eta_star_out["zeta"]);
+      //   }
+      // } 
+    }
+    
+    //
+    // sample sigma2
+    //
+    
+    if (sample_sigma2) {
+      double sigma2_star = sigma2 + R::rnorm(0.0, sigma2_tune);
+      if (sigma2_star > 0.0) {
+        double sigma_star = sqrt(sigma2_star);
+        double mh1 = R::dgamma(sigma2_star, 0.5, 1.0 / lambda_sigma2, true);
+        double mh2 = R::dgamma(sigma2, 0.5, 1.0 / lambda_sigma2, true);
+        mh1 += - N * d * log(sigma_star) -
+          0.5 * as_scalar(accu(pow(Y - mu_mat - zeta, 2)) / sigma2_star);
+        mh2 += - N * d * log(sigma) -
+          0.5 * as_scalar(accu(pow(Y - mu_mat - zeta, 2)) / sigma2);
+        double mh = exp(mh1-mh2);
+        if (mh > R::runif(0.0, 1.0)) {
+          sigma2 = sigma2_star;
+          sigma = sigma_star;
+          sigma2_accept_batch += 1.0 / 50.0;
+        }
+      }
+      // update tuning
+      if ((k+1) % 50 == 0){
+        updateTuning(k, sigma2_accept_batch, sigma2_tune);
+      }
+    }
+    
+    //
+    // sample lambda_sigma2
+    //
+    
+    lambda_sigma2 = R::rgamma(1.0, 1.0 / (s2_sigma2 + sigma2));
+    
+    //
+    // sample tau2
+    //
+    
+    if (sample_tau2) {
+      arma::vec log_tau2_star = mvrnormArmaVecChol(log(tau2),
+                                                   lambda_tau2_tune * Sigma_tau2_tune_chol);
+      arma::vec tau2_star = exp(log_tau2_star);
+      if (all(tau2_star > 0.0)) {
+        arma::vec tau_star = sqrt(tau2_star);
+        arma::mat R_tau_star = R * diagmat(tau_star);
+        arma::mat zeta_star = Z * eta_star * R_tau_star;
+        double mh1 = - 0.5 * as_scalar(accu(pow(Y - mu_mat - zeta_star, 2)) / sigma2) + 
+          sum(log_tau2_star);
+        double mh2 = - 0.5 * as_scalar(accu(pow(Y - mu_mat - zeta, 2)) / sigma2) + 
+          sum(log(tau2));
+        for (int j=0; j<d; j++) {
+          mh1 += d_half_cauchy(tau2_star(j), s2_tau2, true);
+          mh2 += d_half_cauchy(tau2(j), s2_tau2, true);
+          // mh1 += R::dgamma(tau2_star(j), 0.5, 1.0 / lambda_tau2(j), true);
+          // mh2 += R::dgamma(tau2(j), 0.5, 1.0 / lambda_tau2(j), true);
+        }
+        double mh = exp(mh1-mh2);
+        if (mh > R::runif(0.0, 1.0)) {
+          tau2 = tau2_star;
+          tau = tau_star;
+          R_tau = R_tau_star;
+          zeta = zeta_star;
+          tau2_accept_batch += 1.0 / 50.0;
+        }
+      }
+      
+      tau2_batch.row(k % 50) = log(tau2).t();
+      // update tuning
+      if ((k+1) % 50 == 0){
+        updateTuningMV(k, tau2_accept_batch, lambda_tau2_tune, tau2_batch,
+                       Sigma_tau2_tune, Sigma_tau2_tune_chol);
+      }    
+    }
+    
+    //
+    // sample lambda_tau2
+    //
+    
+    for (int j=0; j<d; j++) {
+      lambda_tau2(j) = R::rgamma(1.0, 1.0 / (s2_tau2 + tau2(j)));
+    }
+    
+    //
+    // sample s2_tau2
+    //
+    
+    if (pool_s2_tau2) {
+      double s2_tau2_star = s2_tau2 + R::rnorm(0.0, s2_tau2_tune);
+      if (s2_tau2_star > 0.0 && s2_tau2_star < A_s2) {
+        double mh1 = 0.0;
+        double mh2 = 0.0;
+        for (int j=0; j<d; j++){
+          mh1 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2_star, true);
+          mh2 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2, true);
+        }
+        double mh = exp(mh1-mh2);
+        if (mh > R::runif(0.0, 1.0)) {
+          s2_tau2 = s2_tau2_star;
+          s2_tau2_accept_batch += 1.0 / 50.0;
+        }
+      }
+    }
+    // update tuning
+    if ((k+1) % 50 == 0){
+      updateTuning(k, s2_tau2_accept_batch, s2_tau2_tune);
+    }
+    
+    //
+    // sample xi - MH
+    //
+    
+    if (sample_xi) {
+      arma::vec logit_xi_tilde_star = mvrnormArmaVecChol(logit(xi_tilde),
+                                                         lambda_xi_tune * Sigma_xi_tune_chol);
+      arma::vec xi_tilde_star = expit(logit_xi_tilde_star);
+      arma::vec xi_star = 2.0 * xi_tilde_star - 1.0;
+      // arma::vec xi_star =  mvrnormArmaVecChol(xi, lambda_xi_tune * Sigma_xi_tune_chol);
+      if (all(xi_star > -1.0) && all(xi_star < 1.0)) {
+        Rcpp::List R_out = makeRLKJ(xi_star, d, true, true);
+        arma::mat R_star = as<mat>(R_out["R"]);
+        arma::mat R_tau_star = R_star * diagmat(tau);
+        arma::mat zeta_star = Z * eta_star * R_tau_star;
+        double log_jacobian_star = as<double>(R_out["log_jacobian"]);
+        double mh1 = - 0.5 * as_scalar(accu(pow(Y - mu_mat - zeta_star, 2)) / sigma2) + 
+          // Jacobian adjustment
+          sum(log(xi_tilde_star) + log(ones_B - xi_tilde_star));
+        double mh2 = - 0.5 * as_scalar(accu(pow(Y - mu_mat - zeta, 2)) / sigma2) + 
+          // Jacobian adjustment
+          sum(log(xi_tilde) + log(ones_B - xi_tilde));
+        for (int b=0; b<B; b++) {
+          mh1 += R::dbeta(0.5 * (xi_star(b) + 1.0), eta_vec(b), eta_vec(b), true);
+          mh2 += R::dbeta(0.5 * (xi(b) + 1.0), eta_vec(b), eta_vec(b), true);
+        }
+        double mh = exp(mh1-mh2);
+        if (mh > R::runif(0.0, 1.0)) {
+          xi_tilde = xi_tilde_star;
+          xi = xi_star;
+          R = R_star;
+          R_tau = R_tau_star;
+          log_jacobian = log_jacobian_star;
+          zeta = zeta_star;
+          xi_accept_batch += 1.0 / 50.0;
+        }
+      }
+      
+      // xi_batch.row(k % 50) = xi.t();
+      xi_batch.row(k % 50) = logit(xi_tilde).t();
+      
+      // update tuning
+      if ((k+1) % 50 == 0){
+        updateTuningMV(k, xi_accept_batch, lambda_xi_tune, xi_batch,
+                       Sigma_xi_tune, Sigma_xi_tune_chol);
+      }
+    }
+    
+    //
+    // sample X
+    //
+    
+    if (sample_X) {
+      // if (sample_X_mh) {
+        // sample using Metropolis-Hastings
+        for (int i=N_obs; i<N; i++) {
+          arma::vec X_star = X;
+          X_star(i) += R::rnorm(0.0, X_tune(i-N_obs));
+          // add in prior mean here
+          arma::rowvec D_proposal = sqrt(pow(X_star(i) + mu_X - X_knots, 2)).t();
+          if (corr_function == "gaussian") {
+            D_proposal = pow(D_proposal, 2.0);
+          } 
+          // arma::rowvec D_proposal = sqrt(pow(X_star(i) - X_knots, 2)).t();
+          arma::rowvec c_proposal = exp( - D_proposal / phi);
+          arma::rowvec Z_proposal = c_proposal * C_inv;
+          arma::rowvec zeta_proposal = Z_proposal * eta_star * R_tau;
+          double mh1 = R::dnorm(X_star(i), 0.0, s_X, true);
+          double mh2 = R::dnorm(X(i), 0.0, s_X, true);
+          // double mh1 = R::dnorm(X_star(i), mu_X, s_X, true);
+          // double mh2 = R::dnorm(X(i), mu_X, s_X, true);
+          for (int j=0; j<d; j++) {
+            mh1 += R::dnorm(Y(i, j), mu(j) + zeta_proposal(j), sigma, true);
+            mh2 += R::dnorm(Y(i, j), mu(j) + zeta(i, j), sigma, true);
+          }
+          double mh = exp(mh1-mh2);
+          if (mh > R::runif(0.0, 1.0)) {
+            X = X_star;
+            D.row(i) = D_proposal;
+            c.row(i) = c_proposal;
+            Z.row(i) = Z_proposal;
+            zeta.row(i) = zeta_proposal;
+            X_accept_batch(i-N_obs) += 1.0 / 50.0;
+          }
+        }
+        // update tuning
+        if ((k+1) % 50 == 0){
+          updateTuningVec(k, X_accept_batch, X_tune);
+        }
+      // } else {
+      //   // sample using ESS
+      //   for (int i=N_obs; i<N; i++) {
+      //     double X_prior = R::rnorm(0.0, s_X);
+      //     Rcpp::List ess_out = ess_X(X(i), X_prior, mu_X, X_knots, Y.row(i),
+      //                                mu, eta_star, zeta.row(i), D.row(i), c.row(i),
+      //                                R_tau, Z.row(i), phi, sigma,
+      //                                C_inv, N_obs, N, d, file_name, n_chain,
+      //                                corr_function);
+      //     X(i) = as<double>(ess_out["X"]);
+      //     D.row(i) = as<rowvec>(ess_out["D"]);
+      //     c.row(i) = as<rowvec>(ess_out["c"]);
+      //     Z.row(i) = as<rowvec>(ess_out["Z"]);
+      //     zeta.row(i) = as<rowvec>(ess_out["zeta"]);
+      //   }
+      // }
+    }
+    
+  }
+  // end intial warmup stage
+  
+  
+  
+  Rprintf("Starting MCMC adaptation for chain %d, running for %d iterations \n", 
+          n_chain, n_adapt);
+  // set up output messages
+  file_out.open(file_name, std::ios_base::app);
   file_out << "Starting MCMC adaptation for chain " << n_chain <<
-    ", running for " << n_adapt << " iterations n";
+    ", running for " << n_adapt << " iterations \n";
   // close output file
   file_out.close(); 
   
   // Start MCMC chain
   for (int k=0; k<n_adapt; k++) {
     if ((k+1) % message == 0) {
-      Rprintf("MCMC Adaptive Iteration %dn", k+1);
+      Rprintf("MCMC Adaptive Iteration %d \n", k+1);
       // set up output messages
       std::ofstream file_out;
       file_out.open(file_name, std::ios_base::app);
       file_out << "MCMC Adaptive Iteration " << k+1 << " for chain " <<
-        n_chain << "n";
+        n_chain << "\n";
       // close output file
       file_out.close(); 
     }
@@ -788,38 +1175,38 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
       }    
     }
     
-    // //
-    // // sample lambda_tau2
-    // //
-    // 
-    // for (int j=0; j<d; j++) {
-    //   lambda_tau2(j) = R::rgamma(1.0, 1.0 / (s2_tau2 + tau2(j)));
-    // }
-    // 
-    // //
-    // // sample s2_tau2
-    // //
-    // 
-    // if (pool_s2_tau2) {
-    //   double s2_tau2_star = s2_tau2 + R::rnorm(0.0, s2_tau2_tune);
-    //   if (s2_tau2_star > 0.0 && s2_tau2_star < A_s2) {
-    //     double mh1 = 0.0;
-    //     double mh2 = 0.0;
-    //     for (int j=0; j<d; j++){
-    //       mh1 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2_star, true);
-    //       mh2 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2, true);
-    //     }
-    //     double mh = exp(mh1-mh2);
-    //     if (mh > R::runif(0.0, 1.0)) {
-    //       s2_tau2 = s2_tau2_star;
-    //       s2_tau2_accept_batch += 1.0 / 50.0;
-    //     }
-    //   }
-    // }
-    // // update tuning
-    // if ((k+1) % 50 == 0){
-    //   updateTuning(k, s2_tau2_accept_batch, s2_tau2_tune);
-    // }
+    //
+    // sample lambda_tau2
+    //
+
+    for (int j=0; j<d; j++) {
+      lambda_tau2(j) = R::rgamma(1.0, 1.0 / (s2_tau2 + tau2(j)));
+    }
+
+    //
+    // sample s2_tau2
+    //
+
+    if (pool_s2_tau2) {
+      double s2_tau2_star = s2_tau2 + R::rnorm(0.0, s2_tau2_tune);
+      if (s2_tau2_star > 0.0 && s2_tau2_star < A_s2) {
+        double mh1 = 0.0;
+        double mh2 = 0.0;
+        for (int j=0; j<d; j++){
+          mh1 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2_star, true);
+          mh2 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2, true);
+        }
+        double mh = exp(mh1-mh2);
+        if (mh > R::runif(0.0, 1.0)) {
+          s2_tau2 = s2_tau2_star;
+          s2_tau2_accept_batch += 1.0 / 50.0;
+        }
+      }
+    }
+    // update tuning
+    if ((k+1) % 50 == 0){
+      updateTuning(k, s2_tau2_accept_batch, s2_tau2_tune);
+    }
     
     //
     // sample xi - MH
@@ -930,24 +1317,24 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
     
   }
   
-  Rprintf("Starting MCMC fit for chain %d, running for %d iterations n", 
+  Rprintf("Starting MCMC fit for chain %d, running for %d iterations \n", 
           n_chain, n_mcmc);
   // set up output messages
   file_out.open(file_name, std::ios_base::app);
   file_out << "Starting MCMC fit for chain " << n_chain <<
-    ", running for " << n_mcmc << " iterations n";
+    ", running for " << n_mcmc << " iterations \n";
   // close output file
   file_out.close(); 
   
   // Start MCMC chain
   for (int k=0; k<n_mcmc; k++) {
     if ((k+1) % message == 0) {
-      Rprintf("MCMC Fitting Iteration %dn", k+1);
+      Rprintf("MCMC Fitting Iteration %d \n", k+1);
       // set up output messages
       std::ofstream file_out;
       file_out.open(file_name, std::ios_base::app);
       file_out << "MCMC Fitting Iteration " << k+1 << " for chain " <<
-        n_chain << "n";
+        n_chain << "\n";
       // close output file
       file_out.close(); 
     }
@@ -1129,34 +1516,34 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
       }
     }
     
-    // //
-    // // sample lambda_tau2
-    // //
-    // 
-    // for (int j=0; j<d; j++) {
-    //   lambda_tau2(j) = R::rgamma(1.0, 1.0 / (s2_tau2 + tau2(j)));
-    // }
-    // 
-    // //
-    // // sample s2_tau2
-    // //
-    // 
-    // if (pool_s2_tau2) {
-    //   double s2_tau2_star = s2_tau2 + R::rnorm(0.0, s2_tau2_tune);
-    //   if (s2_tau2_star > 0.0 && s2_tau2_star < A_s2) {
-    //     double mh1 = 0.0;
-    //     double mh2 = 0.0;
-    //     for (int j=0; j<d; j++){
-    //       mh1 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2_star, true);
-    //       mh2 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2, true);
-    //     }
-    //     double mh = exp(mh1-mh2);
-    //     if (mh > R::runif(0.0, 1.0)) {
-    //       s2_tau2 = s2_tau2_star;
-    //       s2_tau2_accept += 1.0 / n_mcmc;
-    //     }
-    //   }
-    // }
+    //
+    // sample lambda_tau2
+    //
+
+    for (int j=0; j<d; j++) {
+      lambda_tau2(j) = R::rgamma(1.0, 1.0 / (s2_tau2 + tau2(j)));
+    }
+
+    //
+    // sample s2_tau2
+    //
+
+    if (pool_s2_tau2) {
+      double s2_tau2_star = s2_tau2 + R::rnorm(0.0, s2_tau2_tune);
+      if (s2_tau2_star > 0.0 && s2_tau2_star < A_s2) {
+        double mh1 = 0.0;
+        double mh2 = 0.0;
+        for (int j=0; j<d; j++){
+          mh1 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2_star, true);
+          mh2 += R::dgamma(lambda_tau2(j), 0.5, 1.0 / s2_tau2, true);
+        }
+        double mh = exp(mh1-mh2);
+        if (mh > R::runif(0.0, 1.0)) {
+          s2_tau2 = s2_tau2_star;
+          s2_tau2_accept += 1.0 / n_mcmc;
+        }
+      }
+    }
     
     //
     // sample xi - MH
@@ -1288,26 +1675,26 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X_input, List params,
   if (sample_mu) {
     if (sample_mu_mh) {
       file_out << "Average acceptance rate for mu  = " << mean(mu_accept) <<
-        " for chain " << n_chain << "n";
+        " for chain " << n_chain << "\n";
     }
   }
   if (sample_eta_star) {
     file_out << "Average acceptance rate for eta_star  = " << mean(eta_star_accept) <<
-      " for chain " << n_chain << "n";
+      " for chain " << n_chain << "\n";
   }
   if (sample_phi) {
     file_out << "Average acceptance rate for phi  = " << mean(phi_accept) <<
-      " for chain " << n_chain << "n";
+      " for chain " << n_chain << "\n";
   }
   // file_out << "Average acceptance rate for X  = " << mean(X_accept) << 
   // " for chain " << n_chain << "n";
   if (sample_xi) {
     file_out << "Average acceptance rate for xi  = " << mean(xi_accept) << 
-      " for chain " << n_chain << "n";
+      " for chain " << n_chain << "\n";
   }
   if (sample_tau2) {
     file_out << "Average acceptance rate for tau2  = " << mean(tau2_accept) <<
-      " for chain " << n_chain << "n";
+      " for chain " << n_chain << "\n";
   }
   // close output file
   file_out.close(); 
