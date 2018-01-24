@@ -454,6 +454,7 @@ include_graphics(here("figures", "pollen-fit2.png"))
 
 
 ## Cross-validation
+Cross-validation took 4.1 hours running 6 mcmc chains on a 12-fold cross-validation problem on a 2017 iMac with 4.2GHz processor.
 
 ```{r cv-mvgp-pollen}
 y_cv <- y
@@ -484,8 +485,10 @@ library(parallel)
 library(rlecuyer)
 ## define models to fit
 models <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF")
+
 ## determines the number of cores on the machine
-cps <- 4
+## make sure you have at least enough cores to fit the model
+cps <- 6
 ## Initalize multicore 
 sfInit(parallel=TRUE, cpus=cps)
 ## Setup random number generator on the cluster
@@ -501,13 +504,27 @@ for (model_name in models) {
     ##
     ## Long running CV
     ##
+    start <- Sys.time()
     if (model_name == "MVGP") {
       ## create temporary progress file  
-      file.create(here("progress", "cross-validate/dm-cv-mvgp.txt"))
+      file.create(here("model-fit", "progress", "cross-validate", 
+                       "dm-cv-mvgp.txt"))
+      
+      sink(here("model-fit", "progress", "cross-validate", 
+                "dm-cv-mvgp.txt"))
+      print(paste("MCMC started at", start))
+      sink()
     }
     CV_out <- sfSapply(1:kfold, makeCV, model_name=model_name, y_cv=y_cv,
                        y_cv_prop=y_cv_prop, X_cv=X_cv, params=params, 
                        folds=folds)
+    if (model_name == "MVGP") {
+      ## end timing
+      sink(here("model-fit", "progress", "cross-validate", 
+                "dm-cv-mvgp.txt"), append = TRUE)
+      print(Sys.time() - start)
+      sink()
+    }
     CRPS <- unlist(CV_out[1, ])
     MSPE <- unlist(CV_out[2, ])
     MAE <- unlist(CV_out[3, ])
@@ -517,7 +534,7 @@ for (model_name in models) {
                                        model_name, ".RData")))
   }
 }
-  ## ends snowfall session
+## ends snowfall session
 sfStop()
 
 ```

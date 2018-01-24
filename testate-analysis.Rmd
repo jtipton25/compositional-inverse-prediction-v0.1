@@ -4,21 +4,19 @@ author: "John Tipton"
 date: "May 7, 2016"
 output: html_document  
 ---
-## To Do
-- add in additive error terms
-- Is there an identifiability issue in the Dirichlet-multinomial?
 
 
 ```{r setup, tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=6, include=FALSE, eval=TRUE}
 library(mvnfast)
 library(ggplot2)
-library(ggmcmc)
+library(reshape2)
 library(Matrix)
 library(fields)
 library(MCMCpack)
 library(coda)
-library(nimble)
 library(snowfall)
+library(parallel)
+library(rlecuyer)
 library(mcmcplots)
 library(data.table)
 library(DirichletReg)
@@ -26,10 +24,41 @@ library(randomForest)
 library(xtable)
 library(gridExtra)
 library(knitr)
+library(here)
+library(grid)
+library(gtable)
+library(GGally)
 
 knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
 
-source("~/functions/multiplot.R")
+
+##
+## source functions used in the code below
+##
+
+## simulate the cholesky of the correlation matrix
+source(here("functions", "make-lkj.R"))
+
+## simulate the correlation matrix
+source(here("functions", "make-correlation-matrix.R"))
+
+## layout multiple ggplot objects in one plot
+source(here("functions", "multiplot.R"))
+
+## load function to convert MCMC output to CODA object for diagnostics
+source(here("functions", "convert-to-coda.R"))
+
+## load Gelman-Rubin diagnostic for lack of convergence
+source(here("functions", "make_gelman_rubin.R"))
+
+## evaluate a probabilistic predictive distribution using CRPS score
+Rcpp::sourceCpp(here("functions", "makeCRPS.cpp"))
+
+## evaluate a Gaussian predictive distribution summarized by mean and 
+## standard deviation using CRPS score
+source(here("functions", "makeCRPSGauss.R"))
+
+
 n_adapt <- 150000
 n_mcmc <- 150000
 n_thin <- 150
@@ -42,27 +71,13 @@ N_pred <- 25
 n_knots <- 30
 corr_fun <- "gaussian"
   
-if (!dir.exists("~/mvgp/figures/")) {
-  dir.create("~/mvgp/figures/")
-}
-if (!dir.exists("~/mvgp/progress/")) {
-  dir.create("~/mvgp/progress/")
-}
-if (!dir.exists("~/mvgp/progress/cross-validate/")) {
-  dir.create("~/mvgp/progress/cross-validate/")
-}
-if (!dir.exists("~/mvgp/model-fit/")) {
-  dir.create("~/mvgp/model-fit/")
-}
-if (!dir.exists("~/mvgp/model-fit/diagnostics/")) {
-  dir.create("~/mvgp/model-fit/diagnostics")
-}
 ```
 
 # Load Testate Data and R code
 ```{r fullData, echo=FALSE, include=FALSE, eval=TRUE, results='hide'}
-raw_data <- read.csv(file="~/testate/data/North American Raw Testate - Paleon 2017-Sheet1.csv", 
-                     skip=6)
+raw_data <- read.csv(file=here("data", 
+                               paste0("North American Raw Testate -", 
+                                      " Paleon 2017-Sheet1.csv")), skip=6)
 
 ## subset to Booth 2008
 raw_data <- raw_data[1:378, ]
@@ -76,8 +91,7 @@ y <- y[1:356, ]
 X <- X[1:356]
 
 ## join species
-
-source("~/testate/data/join-testate-booth.R")
+source(here("functions", "join-testate-booth.R"))
 
 ## remove zeros
 no_obs <- which(colSums(y) == 0)
@@ -109,13 +123,10 @@ testatePlotData <- data.frame(species=as.factor(rep(colnames(y), each=N)),
                               Wetness=rep(X, times=dim(y)[2]))
 
 
-png(file="~/mvgp/figures/testate-plot.png", width=18, height=9,
+png(file=here("figures", "testate-plot.png"), width=18, height=9,
     units="in", res=100)
-# units="in", res=400)
 ggplot(testatePlotData, aes(x=Wetness, y=Count, color=species, group=species)) +
   geom_point(alpha=0.25) +
-  # geom_line(stat="smooth", method="loess", aes(y=Count, x=Wetness),
-  #           alpha=0.5, lwd=1.25) +
   theme(legend.position="none") + ggtitle("Testate Composition vs. Water Table Depth") + 
   labs(x="Water Table Depth", y="Composition") + 
   theme(plot.title=element_text(size=40, face="bold", hjust=0.5)) + 
@@ -124,12 +135,15 @@ ggplot(testatePlotData, aes(x=Wetness, y=Count, color=species, group=species)) +
         axis.title.x = element_text(size = 22), 
         axis.title.y = element_text(size = 22))
 dev.off()
+
+include_graphics(here("figures", "testate-plot.png"))
 ```
 
 
 
 ```{r}
 y <- as.matrix(y)
+## center the covariates for algorithm stability
 mean_X <- mean(X)
 sd_X <- sd(X)
 X <- (X - mean_X) / sd_X
@@ -139,11 +153,12 @@ X_knots <- seq(min(X, na.rm=TRUE)-1.25*sd(X, na.rm=TRUE),
 
 
 ## Held out for prediction
+This model took 8.8 hours running 4 mcmc chains in parallel on a 2017 iMac with 4.2GHz processor.
 
 ```{r fit-booth-2008, echo=FALSE, message=FALSE, warning=FALSE, eval=TRUE}
-if (file.exists("~/mvgp/model-fit/fit-dm-mvgp-booth.RData")) {
+if (file.exists(here("model-fit", "fit-dm-mvgp-booth.RData"))) {
   ## Load MCMC run
-  load("~/mvgp/model-fit/fit-dm-mvgp-booth.RData")
+  load(here("model-fit", "fit-dm-mvgp-booth.RData"))
 } else {
   ##    
   ## Long running MCMC
@@ -156,10 +171,11 @@ if (file.exists("~/mvgp/model-fit/fit-dm-mvgp-booth.RData")) {
                  X_knots=X_knots, message=message)
   
   parallelChains <- function (n_chains) {
-    Rcpp::sourceCpp('~/mvgp/mcmc/mcmc-dirichlet-multinomial-mvgp.cpp')
+    Rcpp::sourceCpp(here("mcmc", "mcmc-dirichlet-multinomial-mvgp.cpp"))
     out <- coda::mcmc(mcmcRcpp(y[-sample_idx, ], X[-sample_idx], y[sample_idx, ], 
                                params, n_chain=n_chains, 
-                               file_name="progress/dm-mvgp-booth.txt"))
+                               file_name=here("model-fit", "progress",
+                                              "dm-mvgp-booth.txt")))
   }
   
   ## Initalize multicore
@@ -167,16 +183,27 @@ if (file.exists("~/mvgp/model-fit/fit-dm-mvgp-booth.RData")) {
   sfClusterSetupRNG()
   sfExport("y", "X", "params", "sample_idx", "N")
   sfLibrary(coda)
+  sfLibrary(here)
   
   ## create temporary progress file  
-  file.create("./progress/dm-mvgp-booth.txt")
+  file.create(here("model-fit", "progress", "dm-mvgp-booth.txt"))
+  start <- Sys.time()
+  sink(here("model-fit", "progress", "dm-mvgp-booth.txt"))
+  print(paste("MCMC started at", start))
+  sink()
   
   ## run MCMC
   out <- sfLapply(1:4, parallelChains)
   
+  ## end timing
+  sink(here("model-fit", "progress", "dm-mvgp-booth.txt"), append = TRUE)
+  print(Sys.time() - start)
+  sink()
+
+  ## stop the parallel cluster  
   sfStop()
     
-  save(out, sample_idx, file="~/mvgp/model-fit/fit-dm-mvgp-booth.RData")
+  save(out, sample_idx, file=here("model-fit", "fit-dm-mvgp-booth.RData"))
 }
 ```
 
@@ -213,28 +240,23 @@ for(i in 1:n_chains){
 
 
 ```{r, eval=TRUE}
-source("~/mvgp/functions/convert-to-coda.R")
 out <- convert_to_coda(out)
 ```
 
 
 
 ```{r, eval=TRUE}
-source("~/mvgp/nimble/functions/make_gelman_rubin.R")
 Rhat <- make_gelman_rubin(out)
 layout(matrix(1:9, 3, 3))
 hist(Rhat[grepl("mu", names(Rhat))], main = "Rhat for mu")
 hist(Rhat[grepl("eta_star", names(Rhat))], main = "Rhat for eta_star")
 hist(Rhat[grepl("alpha", names(Rhat))], main = "Rhat for alpha")
 hist(Rhat[grepl("zeta", names(Rhat))], main = "Rhat for zeta")
-# hist(Rhat[grepl("epsilon", names(Rhat))], main = "Rhat for epsilon")
 hist(Rhat[grepl("tau2", names(Rhat))], main = "Rhat for tau2")
 hist(Rhat[grepl("X", names(Rhat))], main = "Rhat for X")
-# plot(Rhat[grepl("phi", names(Rhat))], main = "Rhat for phi")
 abline(h=1, col='red')
 hist(Rhat[grepl("xi", names(Rhat))], main = "Rhat for xi")
 hist(Rhat, main="All parameters")
-Rhat[!is.finite(Rhat)] <- NA
 Rhat[grepl("phi", names(Rhat))]
 max(unlist(na.omit(Rhat)))
 ```
@@ -300,42 +322,6 @@ matplot(alpha_post[, 4, ], type='l')
 ```
 
 
-
-```{r, eval=TRUE}
-idx <- order(X[-sample_idx])
-zeta_post_mean <- apply(zeta_post, c(2,3), mean)
-matplot(X[-sample_idx][idx], zeta_post_mean[idx, ], type='l')
-```
-
-
-
-```{r, eval=TRUE}
-layout(matrix(1, 1, 1))
-matplot(apply(X_post, 2, mean), type='l',
-        ylim=c(-5, 5))
-matplot(apply(X_post, 2, quantile, prob = 0.025), 
-        type='l', add=TRUE, lty=2)
-matplot(apply(X_post, 2, quantile, prob = 0.975), 
-        type='l', add=TRUE, lty=2)
-lines(X[sample_idx], col = 'red')
-```
-
-
-
-```{r, eval=TRUE}
-layout(matrix(1, 1, 1))
-idx <- order(X[sample_idx])
-matplot(apply(X_post, 2, mean)[idx], type='l',
-        ylim=c(-5, 5))
-matplot(apply(X_post, 2, quantile, prob = 0.025)[idx], 
-        type='l', add=TRUE, lty=2)
-matplot(apply(X_post, 2, quantile, prob = 0.975)[idx], 
-        type='l', add=TRUE, lty=2)
-lines(X[sample_idx][idx], col = 'red')
-```
-
-
-
 ```{r, include=FALSE}
 ## sorted to increase
 idx <- order(X[sample_idx])
@@ -347,18 +333,56 @@ sim.df <- data.frame(Covariate=c(X_ci),
                                each=n_samples*0.95))
 
 ##  only add observation ticks every 10 observations
-png(file="~/mvgp/figures/testate-predictions.png", width=6, height=3,
+png(file=here("figures", "testate-predictions.png"), width=6, height=3,
     units="in", res=100)
-    # units="in", res=400)
 ggplot(sim.df, aes(Observation, Covariate)) +
   geom_violin(position="identity") +
   geom_point(aes(Observation, truth), color="red") +
   scale_x_discrete(breaks=seq(5, 50, 5)) + 
   labs(x="Observation", y="Unobserved Water Table Depth")
 dev.off()
+
+include_graphics(here("figures", "testate-predictions.png"))
 ```
 
 
+
+## Order species by predicted maximal response
+```{r}
+zeta_post_mean <- apply(zeta_post, c(2, 3), mean)
+alpha_post_mean <- apply(alpha_post, c(2, 3), mean)
+alpha_post_sum_to_one <- alpha_post
+for (k in 1:n_samples) {
+  for (i in 1:(N-length(sample_idx))) {
+    alpha_post_sum_to_one[k, i, ] <- alpha_post_sum_to_one[k, i, ] /
+        sum(alpha_post_sum_to_one[k, i, ])
+  }
+}
+alpha_post_sum_to_one <- apply(alpha_post_sum_to_one, c(2, 3), mean)
+
+species_maxima <- rep(0, dim(zeta_post_mean)[2])
+
+## prodcues warnings due to some non-unique maxima,
+## but plots show this is due to multiple measurements
+## at the same covariate value
+for(i in 1:dim(zeta_post_mean)[2]) {
+  ## order on zeta
+  # species_maxima[i] <- X[-sample_idx][which(zeta_post_mean[, i] ==
+  #                                             max(zeta_post_mean[, i]))]
+  ## order on alpha_post_sum_to_one
+  species_maxima[i] <- X[-sample_idx][which(alpha_post_sum_to_one[, i] ==
+                                              max(alpha_post_sum_to_one[, i]))]
+}
+
+layout(matrix(1:24, 4, 6))
+for(i in 1:dim(zeta_post_mean)[2]) {
+  # plot(X[-sample_idx], zeta_post_mean[, i], type='p')
+  plot(X[-sample_idx], alpha_post_sum_to_one[, i], type='p')
+  abline(v=species_maxima[i], col="red")
+}
+
+order_species <- order(species_maxima, decreasing = FALSE)
+```
 
 
 ```{r, eval=TRUE}
@@ -367,20 +391,17 @@ for (i in 1:n_samples) {
   Omega_post_mean <- Omega_post_mean + 
     1/n_samples * t(R_post[i, , ]) %*% R_post[i, , ]
 }
-# layout(matrix(1:4, 2, 2))
-# hist(Omega_post_mean)
-# hist(cov2cor(Sigma))
-# hist(Omega_post_mean - cov2cor(Sigma))
-library(GGally)
+
 colnames(Omega_post_mean) <- colnames(y)
-png(file="~/mvgp/figures/testate-correlations.png", width=18, height=9,
+png(file=here("figures", "testate-correlations.png"), width=18, height=9,
     units="in", res=100)
-# units="in", res=400)
-ggcorr(data=NULL, cor_matrix=Omega_post_mean, hjust=0.9, layout.exp=3, size=10) + 
+ggcorr(data=NULL, cor_matrix=Omega_post_mean[order_species, order_species], 
+       hjust=0.9, layout.exp=3, size=10) + 
     ggtitle("Posterior Correlations") +   
   theme(plot.title=element_text(size=40, face="bold", hjust=0.5))
-
 dev.off()
+
+include_graphics(here("figures", "testate-correlations.png"))
 ```
 
 
@@ -402,19 +423,20 @@ mu_post_mean <- apply(mu_post, 2, mean)
 p_alpha <- matrix(0, N-N_pred, d)
 for (i in 1:(N-N_pred)) {
   p_alpha[i, ] <- exp(mu_post_mean + zeta_post_mean[i, ]) / sum(exp(mu_post_mean + zeta_post_mean[i, ]))
-  # p_alpha[i, ] <- alpha_post_mean[i, ] / sum(alpha_post_mean[i, ])
 }
 y_prop <- y
 for (i in 1:N) {
   y_prop[i, ] <- y[i, ] / sum(y[i, ])
 }
 
-fitPlotData <- data.frame(species=as.factor(rep(colnames(y), each=N-N_pred)), 
-                          count=c(y_prop[-sample_idx, ]), 
-                          depth=rep(X[-sample_idx]*sd_X + mean_X, times=d),
-                          alpha=c(p_alpha), 
-                          alpha_lower=c(alpha_post_lower_95), 
-                          alpha_upper=c(alpha_post_upper_95))
+fitPlotData <- data.frame(
+  species      = factor(rep(colnames(y), each=N-N_pred),
+                        levels=colnames(y)[order_species]), 
+  count        = c(y_prop[-sample_idx, ]), 
+  depth        = rep(X[-sample_idx]*sd_X + mean_X, times=d),
+  alpha        = c(p_alpha), 
+  alpha_lower  = c(alpha_post_lower_95), 
+  alpha_upper  = c(alpha_post_upper_95))
 
 g1_post <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
   geom_point(alpha=0.25) + theme(legend.position="none") +
@@ -439,15 +461,16 @@ g2_post <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=specie
         axis.title.x = element_text(size = 22), 
         axis.title.y = element_text(size = 22))
 
-source("~/functions/multiplot.R")
-png(file="~/mvgp/figures/testate-fit.png", width=6, height=3,
+png(file=here("figures", "testate-fit.png"), width=6, height=3,
     units="in", res=100)
-    # units="in", res=400)
 multiplot(g1_post, g2_post, cols=2)
 dev.off()
 
-library(grid)
-library(gtable)
+include_graphics(here("figures", "testate-fit.png"))
+```
+
+
+```{r}
 g <- ggplotGrob(g2_post)
 pos =  c(subset(g$layout, grepl("panel", g$layout$name), select = t))
 for(i in pos) g$heights[i-1] = unit(0.8,"cm")
@@ -470,6 +493,7 @@ dev.off()
 
 
 ## Cross-validation - Booth 2008
+Cross-validation took 22.5 hours running 6 mcmc chains on a 12-fold cross-validation problem on a 2017 iMac with 4.2GHz processor.
 
 ```{r cv-mvgp-booth}
 y_cv <- y
@@ -483,29 +507,24 @@ colnames(y_cv) <- as.character(1:dim(y_cv)[2])
 colnames(y_cv_prop) <- as.character(1:dim(y_cv)[2])
 X_cv <- X
 set.seed(11)
-# idx <- 
+
 kfold <- 12
 folds <- cut(sample(1:N, N), breaks=kfold, labels=FALSE)
 
-  params <- list(n_adapt=n_adapt, n_mcmc=n_mcmc, n_thin=n_thin,
-                 X_knots=X_knots, message=message)
+params <- list(n_adapt=n_adapt, n_mcmc=n_mcmc, n_thin=n_thin,
+               X_knots=X_knots, message=message)
 
 
 ## load cross validation function
-source("~/mvgp/functions/makeCV-dm-mvgp.R")
+source(here("functions", "makeCV-dm-mvgp.R"))
 
 ## Setup computing cluster
-library(snowfall)
-library(parallel)
-library(rlecuyer)
+
 ## define models to fit
-# models <- c("MVGP")
-models <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF")#, "GJAM")
-# models <- c("MVGP", "WA", "MLRC", "WAPLS", "RF", "GJAM")
-# models <- c("MVGP", "basis", "WA", "MLRC", "WAPLS", "RF", "GJAM")
+models <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF")
+
 ## determines the number of cores on the machine
-cps <- 4
-# cps <- 5
+cps <- 6
 ## Initalize multicore 
 sfInit(parallel=TRUE, cpus=cps)
 ## Setup random number generator on the cluster
@@ -516,25 +535,38 @@ sfExport("y_cv", "y_cv_prop", "X_cv", "folds", "makeCV", "params",
 
 ## Fit cross-validation
 for (model_name in models) {
-  if (!file.exists(paste0("~/mvgp/model-fit/dm-mvgp-cv-booth-", 
-                          model_name, ".RData"))) {
+  if (!file.exists(here("model-fit", paste0("dm-mvgp-cv-booth-", 
+                                            model_name, ".RData")))) {
     ##
     ## Long running CV
     ##
+    start <- Sys.time()
     if (model_name == "MVGP") {
       ## create temporary progress file  
-      file.create("~/mvgp/progress/cross-validate/dm-mvgp-cv.txt")
+      file.create(here("model-fit", "progress", "cross-validate", 
+                       "dm-mvgp-cv.txt"))
+      sink(here("model-fit", "progress", "cross-validate", 
+                "dm-mvgp-cv.txt"))
+      print(paste("MCMC started at", start))
+      sink()
     }
     CV_out <- sfSapply(1:kfold, makeCV, model_name=model_name, y_cv=y_cv,
                        y_cv_prop=y_cv_prop, X_cv=X_cv, params=params, 
                        folds=folds)
+    if (model_name == "MVGP") {
+      ## end timing
+      sink(here("model-fit", "progress", "cross-validate", 
+                "dm-mvgp-cv.txt"), append = TRUE)
+      print(Sys.time() - start)
+      sink()
+    }
     CRPS <- unlist(CV_out[1, ])
     MSPE <- unlist(CV_out[2, ])
     MAE <- unlist(CV_out[3, ])
     coverage <- unlist(CV_out[4, ])
     save(CRPS, MSPE, MAE, coverage, 
-         file=paste0("~/mvgp/model-fit/dm-mvgp-cv-booth-", 
-                     model_name, ".RData"))
+         file=here("model-fit", paste0("dm-mvgp-cv-booth-", 
+                                       model_name, ".RData")))
   }
 }
   ## ends snowfall session
@@ -549,7 +581,6 @@ sfStop()
 
 
 ```{r process-mvgp-CV-booth, echo=FALSE, eval=TRUE, message=FALSE, include=FALSE, warning=FALSE, cache=TRUE}
-# models <- c("MVGP", "WA", "MLRC", "WAPLS", "RF", "GJAM")
 CRPS_out <- matrix(0, length(models), N)
 MSPE_out <- matrix(0, length(models), N)
 MAE_out <- matrix(0, length(models), N)
@@ -557,7 +588,7 @@ coverage_out <- matrix(0, length(models), N)
 idx_model <- 1
 for (model_fit in models) {
   ## Load MCMC run
-  load(paste0("~/mvgp/model-fit/dm-mvgp-cv-booth-", model_fit, ".RData"))
+  load(here("model-fit", paste0("dm-mvgp-cv-booth-", model_fit, ".RData")))
   CRPS_out[idx_model, ] <- CRPS
   MSPE_out[idx_model, ] <- MSPE
   MAE_out[idx_model, ] <- MAE
@@ -570,14 +601,6 @@ MSPE <- data.frame(t(apply(MSPE_out[-c(6, 7), ], 1, mean)))
 MAE <- data.frame(t(apply(MAE_out[-c(6, 7), ], 1, mean)))
 coverage <- data.frame(100/N*t(apply(coverage_out[-c(6, 7), ], 1, sum)))
 
-# colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "RF", "GJAM")
-# colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "RF", "GJAM")
-# colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "RF", "GJAM")
-# colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "RF", "GJAM")
-# colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "GJAM")
-# colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "GJAM")
-# colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "GJAM")
-# colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "GJAM")
 colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
 colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
 colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
@@ -587,10 +610,10 @@ colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
 
 
 ```{r}
-library(xtable)
 sim_results <- rbind(CRPS, MSPE, MAE, coverage)
 rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
-print(xtable(sim_results, digits=4), file="results/cvResults-dm-mvgp-booth.tex", 
+print(xtable(sim_results, digits=4), 
+      file=here("results", "cvResults-dm-mvgp-booth.tex"), 
       floating=FALSE)
 ```
 
@@ -604,8 +627,6 @@ kable(sim_results)
 
 ```{r}
 ## Change to ggplot2
-library(reshape2)
-library(ggplot2)
 rownames(CRPS_out) <- models
 CRPS_gg <- melt(CRPS_out[-c(6, 7), ])
 names(CRPS_gg) <- c("Model", "Observation", "value")
@@ -637,14 +658,9 @@ gg3 <- ggplot(MSPE_gg, aes(x=Model, y=value, color=Model, group=Model),
 
 
 ```{r}
-# png(file=paste("~/testate",
-#                "/figures/",
-#                "processCV-1-mvgp.png",
-#                "", sep=""), width=6, height=4.5, units="in", res=400)
 multiplot(gg1 + theme(legend.position="none"),
           gg2 + theme(legend.position="none"),
           gg3 + theme(legend.position="none"), cols=3)
-# dev.off()
 ```
 
 
@@ -653,500 +669,5 @@ multiplot(gg1 + theme(legend.position="none"),
 matplot(t(CRPS_out), type='l', main="CRPS", col=adjustcolor(1:6, alpha.f=0.25))
 matplot(t(MSPE_out), type='l', main="MSPE", col=adjustcolor(1:6, alpha.f=0.25))
 matplot(t(MAE_out), type='l', main="MAE", col=adjustcolor(1:6, alpha.f=0.25))
-# matplot(t(coverage_out), type='l', main="Coverage")
 ```
 
-
-# Load Testate Data and R code - Full Data
-```{r readData, echo=FALSE, include=FALSE, eval=TRUE, results='hide'}
-raw_data <- read.csv(file="~/testate/data/North American Raw Testate - Paleon 2017-Sheet1.csv", 
-                     skip=6)
-
-y <- raw_data[, 12:85]
-X <- raw_data$WTD..cm.
-
-## join species
-
-source("~/testate/data/join-testate.R")
-
-## remove censored observations
-censored <- which(X == 50)
-X <- X[- censored]
-y <- y[-censored, ]
-
-## remove zeros
-no_obs <- which(colSums(y) == 0)
-
-## down to 47 species
-y <- y[, -no_obs]
-
-## Subset rare species
-sum(y)
-y <- y[, colSums(y) > 500]
-# y <- y[, colSums(y) > 100]
-
-mean_X <- mean(X)
-sd_X <- sd(X)
-X <- (X - mean_X) / sd_X
-N <- nrow(y)
-
-N <- dim(y)[1]
-d <- dim(y)[2]
-
-## transform the data to percentages for use in transfer function models
-y_prop <- y
-for (i in 1:N) {
-  y_prop[i, ] <- y_prop[i, ] / sum(y_prop[i, ])
-}
-```
-
-
-
-```{r}
-testatePlotData <- data.frame(species=as.factor(rep(names(y), each=N)),
-                              Count=c(as.matrix(y_prop)), 
-                              Wetness=rep(X, times=dim(y)[2]))
-
-
-ggplot(testatePlotData, aes(x=Wetness, y=Count, color=species, group=species)) +
-  geom_point(alpha=0.05) +
-  geom_line(stat="smooth", method="loess", aes(y=Count, x=Wetness),
-            alpha=0.5, lwd=1.25) +
-  theme(legend.position="none") + ggtitle("Species composition vs. wetness")
-```
-
-
-```{r}
-y <- as.matrix(y)
-mean_X <- mean(X)
-sd_X <- sd(X)
-X <- (X - mean_X) / sd_X
-X_knots <- seq(min(X, na.rm=TRUE)-1.25*sd(X, na.rm=TRUE), 
-               max(X, na.rm=TRUE)+1.25*sd(X, na.rm=TRUE), length=n_knots)
-```
-
-## Cross-validation - Full Data
-
-```{r cv-dm-mvgp}
-y_cv <- y
-y_cv_prop <- y_cv
-
-## transform the data to percentages for use in transfer function models
-for (i in 1:N) {
-  y_cv_prop[i, ] <- y_cv_prop[i, ] / sum(y_cv_prop[i, ])
-}
-colnames(y_cv) <- as.character(1:dim(y_cv)[2])
-colnames(y_cv_prop) <- as.character(1:dim(y_cv)[2])
-X_cv <- X
-set.seed(11)
-# idx <- 
-kfold <- 12
-folds <- cut(sample(1:N, N), breaks=kfold, labels=FALSE)
-
-params <- list(n_adapt=n_adapt, n_mcmc=n_mcmc, n_thin=n_thin,
-               X_knots=X_knots, message=message)
-
-## load cross validation function
-source("~/mvgp/functions/makeCV-dm-mvgp.R")
-
-## Setup computing cluster
-library(snowfall)
-library(parallel)
-library(rlecuyer)
-## define models to fit
-# models <- c("MVGP")
-models <- c("MVGP", "WA", "MLRC", "WAPLS", "RF", "GJAM")
-# models <- c("MVGP", "basis", "WA", "MLRC", "WAPLS", "RF", "GJAM")
-## determines the number of cores on the machine
-cps <- 4
-# cps <- 5
-## Initalize multicore 
-sfInit(parallel=TRUE, cpus=cps)
-## Setup random number generator on the cluster
-sfClusterSetupRNG()
-# export global variables
-sfExport("y_cv", "y_cv_prop", "X_cv", "folds", "makeCV", "params",
-         "mean_X", "sd_X", "kfold", "d", "n_chains")
-
-## Fit cross-validation
-for (model_name in models) {
-  if (!file.exists(paste("~/mvgp/model-fit/dm-mvgp-cv-full-", model_name,
-                         ".RData", sep=""))) {
-    ##
-    ## Long running CV
-    ##
-    if (model_name == "MVGP") {
-      ## create temporary progress file  
-      file.create("~/mvgp/progress/cross-validate/dm-mvgp-cv-full.txt")
-    }
-    CV_out <- sfSapply(1:kfold, makeCV, model_name=model_name, y_cv=y_cv,
-                       y_cv_prop=y_cv_prop, X_cv=X_cv, params=params, 
-                       folds=folds)
-    CRPS <- unlist(CV_out[1, ])
-    MSPE <- unlist(CV_out[2, ])
-    MAE <- unlist(CV_out[3, ])
-    coverage <- unlist(CV_out[4, ])
-    save(CRPS, MSPE, MAE, coverage, 
-         file=paste0("~/mvgp/model-fit/dm-mvgp-cv-full-", model_name, ".RData"))
-  }
-}
-  ## ends snowfall session
-sfStop()
-
-```
-
-
-
-
-
-
-
-```{r processCV, echo=FALSE, eval=TRUE, message=FALSE, include=FALSE, warning=FALSE, cache=TRUE}
-# models <- c("quantile", "basis", "WA", "MLRC", "WAPLS", "RF"), "GJAM"
-models <- c("MVGP", "WA", "MLRC", "WAPLS", "RF", "GJAM")
-CRPS_out <- matrix(0, length(models), N)
-MSPE_out <- matrix(0, length(models), N)
-MAE_out <- matrix(0, length(models), N)
-coverage_out <- matrix(0, length(models), N)
-idx_model <- 1
-for (model_fit in models) {
-  ## Load MCMC run
-  load(paste0("~/mvgp/model-fit/dm-mvgp-cv-full-", model_fit, ".RData"))
-  CRPS_out[idx_model, ] <- CRPS
-  MSPE_out[idx_model, ] <- MSPE
-  MAE_out[idx_model, ] <- MAE
-  coverage_out[idx_model, ] <- coverage
-  idx_model <- idx_model + 1
-}       
-
-CRPS <- data.frame(t(apply(CRPS_out[-4, ], 1, mean)))
-MSPE <- data.frame(t(apply(MSPE_out[-4, ], 1, mean)))
-MAE <- data.frame(t(apply(MAE_out[-4, ], 1, mean)))
-coverage <- data.frame(100/N*t(apply(coverage_out[-4, ], 1, sum)))
-
-colnames(CRPS) <- c("MVGP", "WA", "MLRC", "RF", "GJAM")
-colnames(MAE) <- c("MVGP", "WA", "MLRC", "RF", "GJAM")
-colnames(MSPE) <- c("MVGP", "WA", "MLRC", "RF", "GJAM")
-colnames(coverage) <- c("MVGP", "WA", "MLRC", "RF", "GJAM")
-```
-
-
-
-```{r}
-library(xtable)
-sim_results <- rbind(CRPS, MSPE, MAE, coverage)
-rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
-print(xtable(sim_results, digits=4), file="results/cvResults-dm-mvgp-full.tex", 
-      floating=FALSE)
-```
-
-
-
-```{r}
-kable(sim_results)
-```
-
-
-```{r}
-## Change to ggplot2
-library(reshape2)
-library(ggplot2)
-rownames(CRPS_out) <- c("MVGP", "WA", "MLRC", "WAPLS", "RF")
-CRPS_gg <- melt(CRPS_out[-4, ])
-names(CRPS_gg) <- c("Model", "Observation", "value")
-CRPS_gg$Model <- factor(CRPS_gg$Model)
-gg1 <- ggplot(CRPS_gg, aes(x=Model, y=value, color=Model, group=Model), 
-              palette="PuOr") +
-  geom_violin(alpha=0.5) + scale_y_continuous(name=NULL) + ggtitle("CRPS") +
-  stat_summary(fun.y=mean, geom="point")
-
-rownames(MAE_out) <- c("MVGP", "WA", "MLRC", "WAPLS", "RF")
-MAE_gg <- melt(MAE_out[-4, ])
-names(MAE_gg) <- c("Model", "Observation", "value")
-MAE_gg$Model <- factor(MAE_gg$Model)
-gg2 <- ggplot(MAE_gg, aes(x=Model, y=value, color=Model, group=Model), 
-              palette="PuOr") +
-  geom_violin(alpha=0.5) +  scale_y_continuous(name=NULL) + ggtitle("MAE") +
-  stat_summary(fun.y=mean, geom="point")
-
-rownames(MSPE_out) <- c("MVGP", "WA", "MLRC", "WAPLS", "RF")
-MSPE_gg <- melt(MSPE_out[-4, ])
-names(MSPE_gg) <- c("Model", "Observation", "value")
-MSPE_gg$Model <- factor(MSPE_gg$Model)
-gg3 <- ggplot(MSPE_gg, aes(x=Model, y=value, color=Model, group=Model), 
-       palette="PuOr") +
-  geom_violin(alpha=0.5) +  scale_y_continuous(name=NULL) + ggtitle("MSPE") +
-  stat_summary(fun.y=mean, geom="point")
-```
-
-```{r}
-multiplot(gg1 + theme(legend.position="none"),
-          gg2 + theme(legend.position="none"),
-          gg3 + theme(legend.position="none"), cols=3)
-```
-
-
-```{r, eval=FALSE}
-# png(file=paste("~/testate",
-#                "/figures/",
-#                "processCV-1-mvgp.png",
-#                "", sep=""), width=6, height=4.5, units="in", res=400)
-multiplot(gg1 + theme(legend.position="none"),
-          gg2 + theme(legend.position="none"),
-          gg3 + theme(legend.position="none"), cols=3)
-# dev.off()
-```
-
-
-```{r}
-matplot(t(CRPS_out), type='l', main="CRPS", col=adjustcolor(1:6, alpha.f=0.25))
-matplot(t(MSPE_out), type='l', main="MSPE", col=adjustcolor(1:6, alpha.f=0.25))
-matplot(t(MAE_out), type='l', main="MAE", col=adjustcolor(1:6, alpha.f=0.25))
-# matplot(t(coverage_out), type='l', main="Coverage")
-```
-
-
-# Load Testate Data and R code for reduced species
-```{r reducedData, echo=FALSE, include=FALSE, eval=TRUE, results='hide'}
-raw_data <- read.csv(file="~/testate/data/North American Raw Testate - Paleon 2017-Sheet1.csv", 
-                     skip=6)
-
-y <- raw_data[, 12:85]
-X <- raw_data$WTD..cm.
-
-## join species
-
-source("~/testate/data/join-testate.R")
-
-## remove censored observations
-censored <- which(X == 50)
-X <- X[- censored]
-y <- y[-censored, ]
-
-## remove zeros
-no_obs <- which(colSums(y) == 0)
-
-## down to 47 species
-y <- y[, -no_obs]
-
-## Subset rare species
-sum(y)
-y <- y[, colSums(y) > 1000]
-# y <- y[, colSums(y) > 100]
-
-mean_X <- mean(X)
-sd_X <- sd(X)
-X <- (X - mean_X) / sd_X
-N <- nrow(y)
-
-N <- dim(y)[1]
-d <- dim(y)[2]
-
-## transform the data to percentages for use in transfer function models
-y_prop <- y
-for (i in 1:N) {
-  y_prop[i, ] <- y_prop[i, ] / sum(y_prop[i, ])
-}
-```
-
-
-
-```{r}
-testatePlotData <- data.frame(species=as.factor(rep(names(y), each=N)),
-                              Count=c(as.matrix(y_prop)), 
-                              Wetness=rep(X, times=dim(y)[2]))
-
-
-ggplot(testatePlotData, aes(x=Wetness, y=Count, color=species, group=species)) +
-  geom_point(alpha=0.05) +
-  geom_line(stat="smooth", method="loess", aes(y=Count, x=Wetness),
-            alpha=0.5, lwd=1.25) +
-  theme(legend.position="none") + ggtitle("Species composition vs. wetness")
-```
-
-
-```{r}
-y <- as.matrix(y)
-mean_X <- mean(X)
-sd_X <- sd(X)
-X <- (X - mean_X) / sd_X
-X_knots <- seq(min(X, na.rm=TRUE)-1.25*sd(X, na.rm=TRUE), 
-               max(X, na.rm=TRUE)+1.25*sd(X, na.rm=TRUE), length=n_knots)
-```
-
-## Cross-validation on reduced data
-
-```{r cv-dm-mvgp-reduced}
-y_cv <- y
-y_cv_prop <- y_cv
-
-## transform the data to percentages for use in transfer function models
-for (i in 1:N) {
-  y_cv_prop[i, ] <- y_cv_prop[i, ] / sum(y_cv_prop[i, ])
-}
-colnames(y_cv) <- as.character(1:dim(y_cv)[2])
-colnames(y_cv_prop) <- as.character(1:dim(y_cv)[2])
-X_cv <- X
-set.seed(11)
-# idx <- 
-kfold <- 12
-folds <- cut(sample(1:N, N), breaks=kfold, labels=FALSE)
-
-params <- list(n_adapt=n_adapt, n_mcmc=n_mcmc, n_thin=n_thin,
-               X_knots=X_knots, message=message)
-
-## load cross validation function
-source("~/mvgp/functions/makeCV-dm-mvgp.R")
-
-## Setup computing cluster
-library(snowfall)
-library(parallel)
-library(rlecuyer)
-## define models to fit
-# models <- c("MVGP")
-models <- c("MVGP", "WA", "MLRC", "WAPLS", "RF")
-# models <- c("MVGP", "basis", "WA", "MLRC", "WAPLS", "RF")
-## determines the number of cores on the machine
-cps <- 4
-# cps <- 5
-## Initalize multicore 
-sfInit(parallel=TRUE, cpus=cps)
-## Setup random number generator on the cluster
-sfClusterSetupRNG()
-# export global variables
-sfExport("y_cv", "y_cv_prop", "X_cv", "folds", "makeCV", "params",
-         "mean_X", "sd_X", "kfold", "d", "n_chains")
-
-## Fit cross-validation
-for (model_name in models) {
-  if (!file.exists(paste("~/mvgp/model-fit/dm-mvgp-cv-full-reduced-", model_name,
-                         ".RData", sep=""))) {
-    ##
-    ## Long running CV
-    ##
-    if (model_name == "MVGP") {
-      ## create temporary progress file  
-      file.create("~/mvgp/progress/cross-validate/dm-mvgp-cv-full.txt")
-    }
-    CV_out <- sfSapply(1:kfold, makeCV, model_name=model_name, y_cv=y_cv,
-                       y_cv_prop=y_cv_prop, X_cv=X_cv, params=params, 
-                       folds=folds)
-    CRPS <- unlist(CV_out[1, ])
-    MSPE <- unlist(CV_out[2, ])
-    MAE <- unlist(CV_out[3, ])
-    coverage <- unlist(CV_out[4, ])
-    save(CRPS, MSPE, MAE, coverage, 
-         file=paste0("~/mvgp/model-fit/dm-mvgp-cv-full-reduced-", model_name, ".RData"))
-  }
-}
-  ## ends snowfall session
-sfStop()
-
-```
-
-
-
-
-
-
-
-```{r processCVreduced, echo=FALSE, eval=TRUE, message=FALSE, include=FALSE, warning=FALSE, cache=TRUE}
-# models <- c("quantile", "basis", "WA", "MLRC", "WAPLS", "RF")
-models <- c("MVGP", "WA", "MLRC", "WAPLS", "RF")
-CRPS_out <- matrix(0, length(models), N)
-MSPE_out <- matrix(0, length(models), N)
-MAE_out <- matrix(0, length(models), N)
-coverage_out <- matrix(0, length(models), N)
-idx_model <- 1
-for (model_fit in models) {
-  ## Load MCMC run
-  load(paste0("~/mvgp/model-fit/dm-mvgp-cv-full-reduced-", model_fit, ".RData"))
-  CRPS_out[idx_model, ] <- CRPS
-  MSPE_out[idx_model, ] <- MSPE
-  MAE_out[idx_model, ] <- MAE
-  coverage_out[idx_model, ] <- coverage
-  idx_model <- idx_model + 1
-}       
-
-CRPS <- data.frame(t(apply(CRPS_out[-4, ], 1, mean)))
-MSPE <- data.frame(t(apply(MSPE_out[-4, ], 1, mean)))
-MAE <- data.frame(t(apply(MAE_out[-4, ], 1, mean)))
-coverage <- data.frame(100/N*t(apply(coverage_out[-4, ], 1, sum)))
-
-colnames(CRPS) <- c("MVGP", "WA", "MLRC", "RF")
-colnames(MAE) <- c("MVGP", "WA", "MLRC", "RF")
-colnames(MSPE) <- c("MVGP", "WA", "MLRC", "RF")
-colnames(coverage) <- c("MVGP", "WA", "MLRC", "RF")
-```
-
-
-
-```{r}
-library(xtable)
-sim_results <- rbind(CRPS, MSPE, MAE, coverage)
-rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage rates")
-print(xtable(sim_results, digits=4), file="results/cvResults-dm-mvgp-full-reduced.tex", 
-      floating=FALSE)
-```
-
-
-
-```{r}
-kable(sim_results)
-```
-
-
-
-```{r}
-## Change to ggplot2
-library(reshape2)
-library(ggplot2)
-rownames(CRPS_out) <- c("MVGP", "WA", "MLRC", "WAPLS", "RF")
-CRPS_gg <- melt(CRPS_out[-4, ])
-names(CRPS_gg) <- c("Model", "Observation", "value")
-CRPS_gg$Model <- factor(CRPS_gg$Model)
-gg1 <- ggplot(CRPS_gg, aes(x=Model, y=value, color=Model, group=Model), 
-              palette="PuOr") +
-  geom_violin(alpha=0.5) + scale_y_continuous(name=NULL) + ggtitle("CRPS") +
-  stat_summary(fun.y=mean, geom="point")
-
-rownames(MAE_out) <- c("MVGP", "WA", "MLRC", "WAPLS", "RF")
-MAE_gg <- melt(MAE_out[-4, ])
-names(MAE_gg) <- c("Model", "Observation", "value")
-MAE_gg$Model <- factor(MAE_gg$Model)
-gg2 <- ggplot(MAE_gg, aes(x=Model, y=value, color=Model, group=Model), 
-              palette="PuOr") +
-  geom_violin(alpha=0.5) +  scale_y_continuous(name=NULL) + ggtitle("MAE") +
-  stat_summary(fun.y=mean, geom="point")
-
-rownames(MSPE_out) <- c("MVGP", "WA", "MLRC", "WAPLS", "RF")
-MSPE_gg <- melt(MSPE_out[-4, ])
-names(MSPE_gg) <- c("Model", "Observation", "value")
-MSPE_gg$Model <- factor(MSPE_gg$Model)
-gg3 <- ggplot(MSPE_gg, aes(x=Model, y=value, color=Model, group=Model), 
-       palette="PuOr") +
-  geom_violin(alpha=0.5) +  scale_y_continuous(name=NULL) + ggtitle("MSPE") +
-  stat_summary(fun.y=mean, geom="point")
-```
-
-
-
-```{r}
-# png(file=paste("~/testate",
-#                "/figures/",
-#                "processCV-1-mvgp.png",
-#                "", sep=""), width=6, height=4.5, units="in", res=400)
-multiplot(gg1 + theme(legend.position="none"),
-          gg2 + theme(legend.position="none"),
-          gg3 + theme(legend.position="none"), cols=3)
-# dev.off()
-```
-
-
-
-```{r}
-matplot(t(CRPS_out), type='l', main="CRPS", col=adjustcolor(1:6, alpha.f=0.25))
-matplot(t(MSPE_out), type='l', main="MSPE", col=adjustcolor(1:6, alpha.f=0.25))
-matplot(t(MAE_out), type='l', main="MAE", col=adjustcolor(1:6, alpha.f=0.25))
-# matplot(t(coverage_out), type='l', main="Coverage")
-```

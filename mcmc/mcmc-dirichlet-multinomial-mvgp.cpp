@@ -317,7 +317,7 @@ List mcmcRcpp (const arma::mat& Y, const arma::vec& X,
   double d = Y.n_cols;
   double N_pred = Y_pred.n_rows;
   double B = Rf_choose(d, 2);
-Rcout << "1" << "\n";  
+
   // count - sum of counts at each site
   arma::vec count(N);
   for (int i=0; i<N; i++) {
@@ -337,9 +337,11 @@ Rcout << "1" << "\n";
   // predictive process knots
   arma::vec X_knots = as<vec>(params["X_knots"]);
   double N_knots = X_knots.n_elem;
-  Rcout << "1" << "\n";  
+
   // constant vectors
   arma::mat I_d(d, d, arma::fill::eye);
+  arma::mat I_knots(N_knots, N_knots, arma::fill::eye);
+  arma::mat I_prevent_singular = I_knots * 1e-8;
   arma::vec ones_d(d, arma::fill::ones);
   arma::vec ones_B(B, arma::fill::ones);
   arma::vec zero_knots(N_knots, arma::fill::zeros);
@@ -530,7 +532,7 @@ Rcout << "1" << "\n";
   // Construct Gaussian Process Correlation matrices
   //
   
-  arma::mat C = exp(- D_knots / phi);
+  arma::mat C = exp(- D_knots / phi) + I_prevent_singular;
   arma::mat C_chol = chol(C);
   arma::mat C_inv = inv_sympd(C);
   arma::mat c = exp( - D / phi);
@@ -714,7 +716,7 @@ Rcout << "1" << "\n";
     if (sample_phi) {
       double phi_star = phi + R::rnorm(0.0, phi_tune);
       if (phi_star > phi_L && phi_star < phi_U) {
-        arma::mat C_star = exp(- D_knots / phi_star);
+        arma::mat C_star = exp(- D_knots / phi_star) + I_prevent_singular;
         arma::mat C_chol_star = chol(C_star);
         arma::mat C_inv_star = inv_sympd(C_star);
         arma::mat c_star = exp(- D / phi_star);
@@ -1024,7 +1026,7 @@ Rcout << "1" << "\n";
     if (sample_phi) {
       double phi_star = phi + R::rnorm(0.0, phi_tune);
       if (phi_star > phi_L && phi_star < phi_U) {
-        arma::mat C_star = exp(- D_knots / phi_star);
+        arma::mat C_star = exp(- D_knots / phi_star) + I_prevent_singular;
         arma::mat C_chol_star = chol(C_star);
         arma::mat C_inv_star = inv_sympd(C_star);
         arma::mat c_star = exp(- D / phi_star);
