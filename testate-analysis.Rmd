@@ -393,7 +393,7 @@ for (i in 1:n_samples) {
 }
 
 colnames(Omega_post_mean) <- colnames(y)
-png(file=here("figures", "testate-correlations.png"), width=18, height=9,
+png(file=here("figures", "testate-correlations.png"), width=18, height=12,
     units="in", res=100)
 ggcorr(data=NULL, cor_matrix=Omega_post_mean[order_species, order_species], 
        hjust=0.9, layout.exp=3, size=10) + 
@@ -481,7 +481,7 @@ for(i in grobs) g$grobs[[i]]$heights <-  unit(1, "npc")
 grid.newpage()
 grid.draw(g)
 
-png(file="~/mvgp/figures/testate-fit2.png", width=18, height=9,
+png(file="~/mvgp/figures/testate-fit2.png", width=18, height=12,
     units="in", res=100)
 # units="in", res=100)
 # units="in", res=400)
@@ -612,7 +612,7 @@ colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
 ```{r}
 sim_results <- rbind(CRPS, MSPE, MAE, coverage)
 rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
-print(xtable(sim_results, digits=4), 
+print(xtable(t(sim_results), digits=4), 
       file=here("results", "cvResults-dm-mvgp-booth.tex"), 
       floating=FALSE)
 ```
@@ -620,7 +620,7 @@ print(xtable(sim_results, digits=4),
 
 
 ```{r}
-kable(sim_results)
+kable(t(sim_results))
 ```
 
 

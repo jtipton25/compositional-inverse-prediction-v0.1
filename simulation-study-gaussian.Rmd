@@ -535,12 +535,12 @@ coverage <- data.frame(100/(N-N_obs)*t(apply(coverage_out, 2, sum)))
 
 sim_results <- rbind(CRPS, MSPE, MAE, coverage)
 rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage rates")
-print(xtable(sim_results, digits=4), file=here("results", "sim-gaussian.tex"),
+print(xtable(t(sim_results), digits=4), file=here("results", "sim-gaussian.tex"),
       floating=FALSE)
 ```
 
 ```{r}
-kable(sim_results)
+kable(t(sim_results))
 ```
 
 

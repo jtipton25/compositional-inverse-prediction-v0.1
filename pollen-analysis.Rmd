@@ -344,7 +344,7 @@ for (i in 1:n_samples) {
     1/n_samples * t(R_post[i, , ]) %*% R_post[i, , ]
 }
 library(GGally)
-png(file=here("figures", "pollen-correlations.png"), width=18, height=9,
+png(file=here("figures", "pollen-correlations.png"), width=18, height=12,
     units="in", res=100)
 colnames(Omega_post_mean) <- c("ACERX", "BETULA", "Conifer", "LARIXPSEU", 
                                "Deciduous", "FAGUS", "FRAXINUX",
@@ -442,7 +442,7 @@ for(i in grobs) g$grobs[[i]]$heights <-  unit(1, "npc")
 grid.newpage()
 grid.draw(g)
 
-png(file=here("figures", "pollen-fit2.png"), width=18, height=9,
+png(file=here("figures", "pollen-fit2.png"), width=18, height=12,
     units="in", res=100)
 grid.draw(g)
 g
@@ -579,14 +579,14 @@ colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
 library(xtable)
 sim_results <- rbind(CRPS, MSPE, MAE, coverage)
 rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
-print(xtable(sim_results, digits=4),
+print(xtable(t(sim_results), digits=4),
       file=here("results", "cvResults-dm-mvgp-pollen.tex"), 
       floating=FALSE)
 ```
 
 
 ```{r}
-kable(sim_results)
+kable(t(sim_results))
 ```
 
 

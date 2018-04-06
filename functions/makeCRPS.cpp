@@ -6,6 +6,10 @@
 using namespace Rcpp;
 using namespace arma;
 
+//
+// Calculate the continuous ranked probability score in the negative orientation...
+//
+
 //[[Rcpp::export]]
 arma::vec makeCRPS(const arma::mat& estimate, const arma::vec& truth,
                    const int& n_samps){
