@@ -804,7 +804,9 @@ if (length(zeros_idx) > 0) {
   predWA <- predict(modWA, y_test_prop, sse=TRUE, nboot=1000)      
 }
 
-CRPS_WA <- makeCRPSGauss(predWA$fit[, 1], sqrt(predWA$v1.boot[, 1]), X_test)
+
+CRPS_WA <- abs(predWA$fit[, 1] - X_test)
+# CRPS_WA <- makeCRPSGauss(predWA$fit[, 1], sqrt(predWA$v1.boot[, 1]), X_test)
 MAE_WA <- abs(predWA$fit[, 1] - X_test)
 MSPE_WA <- (predWA$fit[, 1] - X_test)^2
 coverage_WA <- 
@@ -828,8 +830,9 @@ if (length(zeros_idx) > 0) {
   predMLRC <- predict(modMLRC, y_test_prop, sse=TRUE, nboot=1000)
 }
 
-CRPS_MLRC <- makeCRPSGauss(predMLRC$fit[, 1], sqrt(predMLRC$v1.boot[, 1]),
-                      X_test)
+CRPS_MLRC <- abs(predMLRC$fit[, 1] - X_test)
+# CRPS_MLRC <- makeCRPSGauss(predMLRC$fit[, 1], sqrt(predMLRC$v1.boot[, 1]),
+#                       X_test)
 MSPE_MLRC <- (predMLRC$fit[, 1] - X_test)^2
 MAE_MLRC <- abs(predMLRC$fit[, 1] - X_test)
 coverage_MLRC <- 
@@ -846,8 +849,9 @@ train_df <- data.frame(moisture=X_train, y_train)
 test_df <- data.frame(y_test)
 rf <- randomForest(moisture ~ ., data = train_df)
 
-CRPS_rf <- makeCRPS(t(matrix(predict(rf, test_df, predict.all=TRUE)$individual, 
-                          length(X_test), 500)), X_test, 500)
+CRPS_rf <- abs(predict(rf, test_df) - X_test)
+# CRPS_rf <- makeCRPS(t(matrix(predict(rf, test_df, predict.all=TRUE)$individual, 
+#                           length(X_test), 500)), X_test, 500)
 MSPE_rf <- (predict(rf, test_df) - X_test)^2
 MAE_rf <- abs(predict(rf, test_df) - X_test)
 rf_CI <- t( apply( predict(rf, test_df, predict.all=TRUE)$individual, 1,
@@ -862,9 +866,10 @@ coverage_rf <- ( (X_test >= rf_CI[, 1]) & (X_test <= rf_CI[, 2]) )
 
 modMAT <- rioja::MAT(as.data.frame(y_train), X_train, k=20, lean=FALSE)
 predMAT <- predict(modMAT, as.data.frame(y_test), k=10, sse=TRUE, n.boot=1000)
-CRPS_MAT <- makeCRPSGauss(
-  predMAT$fit.boot[, 2], 
-  sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2]), X_test)
+CRPS_MAT <- abs( predMAT$fit.boot[, 2] - X_test)
+# CRPS_MAT <- makeCRPSGauss(
+#   predMAT$fit.boot[, 2], 
+#   sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2]), X_test)
 MSPE_MAT <- (  predMAT$fit.boot[, 2] - X_test)^2
 MAE_MAT <- abs( predMAT$fit.boot[, 2] - X_test)
 coverage_MAT <- 

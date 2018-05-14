@@ -2,10 +2,12 @@
 .Rhistory
 .RData
 .Ruserdata
-*.html
+**.html
+**.DS_store
 
-/model-fit/*.RData
-/model-fit/diagnostics/*
-/model-fit/progress/*
+**.RData
+/model-fit/**
 /results/*
 /figures/*
+**_cache/
+**_files/
