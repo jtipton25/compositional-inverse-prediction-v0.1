@@ -1,0 +1,911 @@
+---
+title: "Appendix S1: No-analogue Experiment"
+output: pdf_document
+---
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
+set.seed(11)
+library(BayesComposition)
+library(knitr)
+library(ggplot2)
+library(rioja)
+library(analogue)
+library(here)
+library(snowfall)
+library(gridExtra)
+library(dplyr)
+library(here)
+
+N <- 500
+d <- 4
+n_knots <- 30
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, include=FALSE)
+```
+
+
+
+# Model performance under no-analogs for testate amoebae data
+
+We conduct a pseudo-analog simulation using the testate data to test the hypothesis that the weighted averaging (WA) and modern analog technique (MAT) are sensitive to a lack of analogs. We conduct the experiment by filtering out a proportion of analogs approximately equal in size to a 12-fold cross-validation hold-out size which have the greatest minimum square chord distance from the calibration set. Figure \ref{fig:no-analog-testate} shows the distribution of square-chord distance for the training and predictions datasets, showing that the training dataset has fewer nearby analogs in the prediction dataset with respect to square chord distance. Using the testate data, we train the model using the closest analogs and predict the unobserved water table depth on the non-analog hold-out data. 
+
+The results from the no-analog simulation study in Table \ref{tab:app-one} show that the proposed MVGP and GAM model show reduced loss of predictive skill under the no analog scenario when compared to WA and MAT. The likelihood-based methods MVGP, GAM, and MLRC do not show as large a decrease in predictive performance because the likelihood framework can handle extrapolations to novel compositions more naturally by leveraging the latent functional relationship to the covariate. The likelihoods accommodate non-analog compositions easily because the functional relationship of each species is modeled, allowing for prediction using compositions which are not close to those previously observed but whose individual species' functional responses are modeled.  We still see a low empirical coverage rate for MVGP and GAM on the testate amoeba data, suggesting that there is likely overdispersion or other characteristics in the data that are not explained by the MVGP and GAM methods.
+
+
+
+\begin{figure}
+\centering\includegraphics[width=1.0\linewidth]{testate-analog-distance.png}
+\caption{Plot of square chord distance distributions for the training and prediction data for the testate data. The simulated no-analogs square chord distribution is centered at a higher value than the training dataset.}
+\label{fig:no-analog-testate}
+\end{figure}
+
+
+\begin{table}
+\centering
+\caption{Results for predicting unobserved non-analog covariate values using the testate amoeba data. Smaller MSPE, MAE, and CRPS values indicate better model performance. Coverage values closer to the nominal 95\% credible interval indicate better model performance.}\label{tab:app-one}
+\input{../../../results/appendix-booth}
+\end{table}
+
+
+
+# Model performance under no-analogs for pollen data
+
+We also conduct a pseudo-analog simulation using the pollen data to test the hypothesis that the weighted averaging (WA) and modern analog technique (MAT) are sensitive to a lack of analogs. Like the testate amoeba data, we conduct the experiment by filtering out a proportion of analogs approximately equal in size to a 12-fold cross-validation hold-out size. The held-out data are those which have the greatest minimum square chord distance from the calibration set. Figure \ref{fig:no-analog-pollen} shows the distribution of square-chord distance for the training and predictions datasets, showing that the training dataset has fewer nearby analogs in the prediction dataset with respect to square chord distance. Using the pollen data, we train the model using the closest analogs and predict the unobserved average July Temperature on the non-analog hold-out data. 
+
+The results from the no-analog simulation study in Table \ref{tab:app-two} show that the proposed MVGP and GAM model show reduced loss of predictive skill under the no analog scenario when compared to WA and MAT. The likelihood-based methods MVGP, GAM, and MLRC do not show as large a decrease in predictive performance because the likelihood framework can handle extrapolations to novel compositions more naturally by leveraging the latent functional relationship to the covariate. The likelihoods accommodate non-analog compositions easily because the functional relationship of each species is modeled, allowing for prediction using compositions which are not close to those previously observed but whose individual species' functional responses are modeled. For the pollen data, MVGP and GAM show a reasonable empirical coverage, suggesting that these models are capturing the characteristics of the pollen data needed for prediction.
+
+\begin{figure}
+\centering\includegraphics[width=1.0\linewidth]{pollen-analog-distance.png}
+\caption{Plot of square chord distance distributions for the training and prediction data for the pollen dataset. The simulated no-analogs square chord distribution is centered at a higher value than the training dataset.}
+\label{fig:no-analog-pollen}
+\end{figure}
+
+
+\begin{table}
+\centering
+\caption{Results for predicting unobserved non-analog covariate values using the testate amoeba data. Smaller MSPE, MAE, and CRPS values indicate better model performance. Coverage values closer to the nominal 95\% credible interval indicate better model performance.}
+\label{tab:app-two}
+\input{../../../results/appendix-pollen}
+\end{table}
+
+# Discussion
+Based on the small empirical study presented above, there is evidence that MVGP is less sensitive to a lack of analogs than WA or MVGP. We see that the likelihood based methods (MVGP, GAM, and MLRC) show less sensitivity to the no-analog problem than the transfer function methods of WA and MAT. The no-analog problem arises in many paleoclimate reconstructions and the implications on the reconstruction are not well understood. Modern likelihood-based methods of climate reconstruction like MVGP show evidence of being robust to this problem and further investigation is needed.
+
+
+
+```{r load-data}
+# Load Testate Data and R code - Booth 2008
+raw_data <- read.csv(file=here("data", "North American Raw Testate - Paleon 2017-Sheet1.csv"), 
+                     skip=6)
+
+## subset to Booth 2008
+raw_data <- raw_data[1:378, ]
+y <- raw_data[, 12:85]
+X <- raw_data$WTD..cm.
+
+## Subset to Booth 2008 data
+N <- 356
+N_obs <- 356
+y <- y[1:356, ]
+X <- X[1:356]
+
+## join species
+
+source(here("functions", "join-testate-booth.R"))
+
+## remove zeros
+no_obs <- which(apply(y, 2, sum) == 0)
+
+## down to 47 species
+y <- y[, -no_obs]
+
+## Subset rare species
+# sum(y)
+y <- y[, apply(y, 2, sum) > 500]
+# y <- y[, colSums(y) > 100]
+
+mean_X <- mean(X)
+sd_X <- sd(X)
+X <- (X - mean_X) / sd_X
+N <- nrow(y)
+
+N <- dim(y)[1]
+d <- dim(y)[2]
+
+## transform the data to percentages for use in transfer function models
+y_prop <- y
+for (i in 1:N) {
+  y_prop[i, ] <- y_prop[i, ] / sum(y_prop[i, ])
+}
+```
+
+
+
+
+```{r sim-analog, message=FALSE, warning=FALSE, cache=TRUE}
+## Simulate a "no-analog" situation
+modMATDist <- MAT(y_prop, X, k=20, lean=FALSE)
+
+mod_dists <- tibble(set = "mod", distance = as.vector(modMATDist$dist.n))
+
+## 0.575 cut-off chosen so the validation set is approximately the same size
+## as one of the 12-fold cross-validation sets
+analog_idx <- which(apply(modMATDist$dist.n, 1, min)  > 0.275)
+# length(analog_idx) ## 32
+# 356/12  ## 30
+
+y_train <- y[-analog_idx, ]
+y_test <- y[analog_idx, ]
+X_train <- X[-analog_idx]
+X_test <- X[analog_idx]
+y_train_prop <- y_train
+for (i in 1:nrow(y_train)) {
+  y_train_prop[i, ] <- y_train_prop[i, ] / sum(y_train_prop[i, ])
+}
+y_test_prop <- y_test
+for (i in 1:nrow(y_test)) {
+  y_test_prop[i, ] <- y_test_prop[i, ] / sum(y_test_prop[i, ])
+}
+N_pred <- dim(y_test)[1]
+
+modMATDistTrain <- MAT(y_train_prop, X, k=20, lean=FALSE)
+predMATDist <- predict(modMATDistTrain, y_test_prop, k=20, sse=TRUE, n.boot=1000, verbose=FALSE)
+mod_dists <- tibble(set = "mod", distance = as.vector(modMATDistTrain$dist.n))
+pred_dists <- tibble(set = "pred", distance = as.vector(predMATDist$dist.n))
+
+MAT_dists <- bind_rows(mod_dists, pred_dists)
+
+
+MAT_dists_plot <- ggplot(MAT_dists, aes(distance, fill=set)) +
+  geom_density(alpha=0.7, adjust=1, colour="grey50") + 
+  labs(x="square chord distance") + 
+  scale_fill_discrete(name=element_blank(), breaks=c("mod", "pred"),
+                      labels=c("Training Set", "Reconstruction Set")) +
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        axis.text.x = element_text(size = 22), 
+        axis.text.y = element_text(size = 22),
+        axis.title.x = element_text(size = 22), 
+        axis.title.y = element_text(size = 22),
+        legend.text=element_text(size=30))
+
+png(file=here::here("manuscript", "mvgp", "appendix", "testate-analog-distance.png"),
+    width=18, height=6, units="in", res=400)
+MAT_dists_plot
+dev.off()
+```
+
+
+
+
+
+```{r plot-analog-data}
+analogPlotData <- data.frame(
+  species = as.factor(rep(colnames(y), each=length(X_train))),
+  Count   = c(as.matrix(y_train_prop)), 
+  Wetness = rep(X_train, times=dim(y_train_prop)[2]))
+
+noanalogPlotData <- data.frame(
+  species = as.factor(rep(colnames(y), each=length(X_test))),
+  Count   = c(as.matrix(y_test_prop)), 
+  Wetness = rep(X_test, times=dim(y_test_prop)[2]))
+
+gp1 <- ggplot(analogPlotData, aes(x=Wetness, y=Count, color=species, group=species)) +
+  geom_point(alpha=0.25) +
+  # geom_line(stat="smooth", method="loess", aes(y=Count, x=Wetness),
+  #           alpha=0.5, lwd=1.25) +
+  theme(legend.position="none") + ggtitle("Analog Training Data") + 
+  labs(x="Water Table Depth", y="Composition") + 
+  theme(plot.title=element_text(size=24, face="bold", hjust=0.5)) + 
+  theme(axis.text.x = element_text(size = 22), 
+        axis.text.y = element_text(size = 22),
+        axis.title.x = element_text(size = 22), 
+        axis.title.y = element_text(size = 22))
+gp2 <- ggplot(noanalogPlotData, 
+              aes(x=Wetness, y=Count, color=species, group=species)) +
+  geom_point(alpha=0.25) +
+  # geom_line(stat="smooth", method="loess", aes(y=Count, x=Wetness),
+  #           alpha=0.5, lwd=1.25) +
+  theme(legend.position="none") + ggtitle("No Analog Training Data") + 
+  labs(x="Water Table Depth", y="Composition") + 
+  theme(plot.title=element_text(size=24, face="bold", hjust=0.5)) + 
+  theme(axis.text.x = element_text(size = 22), 
+        axis.text.y = element_text(size = 22),
+        axis.title.x = element_text(size = 22), 
+        axis.title.y = element_text(size = 22))
+png(file=here::here("manuscript", "mvgp", "appendix", "testate-analog-data.png"),
+    width=6, height=6, units="in", res=400)
+multiplot(gp1, gp2, cols=1)
+dev.off()
+```
+
+
+```{r setup-fit}
+y <- as.matrix(y)
+# mean_X <- mean(X)
+# sd_X <- sd(X)
+# X <- (X - mean_X) / sd_X
+X_knots <- seq(min(X, na.rm=TRUE)-1.25*sd(X, na.rm=TRUE), 
+               max(X, na.rm=TRUE)+1.25*sd(X, na.rm=TRUE), length=n_knots)
+
+params <- list(n_adapt=50000, n_mcmc=150000, n_thin=150, 
+               X_knots=X_knots, message=500)
+
+```
+
+
+```{r fit-testate}
+## Fit no-analog using B-spline model
+if (file.exists(here::here("manuscript", "mvgp", "appendix", "fit",
+                           "testate-no-analog-appendix.RData"))) {
+  ## load mcmc
+  load(file=here::here("manuscript", "mvgp", "appendix", "fit",
+                       "testate-no-analog-appendix.RData"))
+} else {
+  
+  ## potentially long running MCMC code
+  parallelChains <- function (n_chains) {
+    Rcpp::sourceCpp(here::here("mcmc", "mcmc-dirichlet-multinomial-mvgp.cpp"))
+    out <- coda::mcmc(mcmcRcpp(as.matrix(y_train), X_train, as.matrix(y_test), 
+                               params, n_chain=n_chains, 
+                               file_name=here::here("manuscript", "mvgp",
+                                                    "appendix", "progress",               
+                                                    "testate-no-analog.txt")))
+  }
+  
+  ## Initalize multicore
+  sfInit(parallel=TRUE, cpus=4)
+  sfClusterSetupRNG()
+  sfExport("y_train", "X_train", "y_test", "params")
+  sfLibrary(coda)
+  sfLibrary(here)
+  
+  ## create temporary progress file  
+  file.create(here::here("manuscript", "mvgp", "appendix", "progress", 
+                         "testate-no-analog.txt"))
+  
+  ## run MCMC
+  out <- sfLapply(1:4, parallelChains)
+  
+  sfStop()
+  
+  save(out, file=here::here("manuscript", "mvgp", "appendix", "fit",
+                            "testate-no-analog-appendix.RData"))
+  
+  
+  Rhat <- make_gelman_rubin(out)
+  png(file=here::here("manuscript", "mvgp", "appendix", "Rhat-no-analog-appendix.png"),
+      width=6, height=6, units="in", res=400)
+  layout(matrix(1:9, 3, 3))
+  hist(Rhat[grepl("eta", names(Rhat))], main = "Rhat for eta")
+  hist(Rhat[grepl("mu", names(Rhat))], main = "Rhat for mu")
+  hist(Rhat[grepl("alpha", names(Rhat))], main = "Rhat for alpha")
+  hist(Rhat[grepl("zeta", names(Rhat))], main = "Rhat for zeta")
+  hist(Rhat[grepl("tau2", names(Rhat))], main = "Rhat for tau2")
+  hist(Rhat[grepl("X", names(Rhat))], main = "Rhat for X")
+  hist(Rhat[grepl("xi", names(Rhat))], main = "Rhat for xi")
+  hist(Rhat[grepl("phi", names(Rhat))], main = "Rhat for phi")
+  hist(Rhat, main="All parameters")
+  dev.off()
+}
+```
+
+
+```{r process-posterior}
+## extract posterior samples
+samples <- convert_to_coda(out)
+
+n_chains <- 4
+n_save <- dim(samples[[1]])[1] 
+n_samples <- n_save*n_chains
+
+mu_post <- matrix(0, n_samples, d)
+eta_star_post <- array(0, dim=c(n_samples, n_knots, d))
+zeta_post <-  array(0, dim=c(n_samples, N-N_pred, d))
+alpha_post <-  array(0, dim=c(n_samples, N-N_pred, d))
+zeta_pred_post <-  array(0, dim=c(n_samples, N_pred, d))
+alpha_pred_post <-  array(0, dim=c(n_samples, N_pred, d))
+phi_post <- rep(0,  n_samples)
+tau2_post <- matrix(0,  n_samples, d)
+X_pred <- matrix(0,  n_samples, N_pred)
+xi_post <- array(0,  dim=c(n_samples, choose(d, 2)))
+R_post <- array(0, dim=c(n_samples, d, d))
+
+for(i in 1:n_chains){
+  mu_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$mu
+  eta_star_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$eta_star
+  zeta_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$zeta
+  alpha_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha
+  zeta_pred_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$zeta_pred
+  alpha_pred_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha_pred
+  phi_post[1:n_save + (i-1)*n_save] <- out[[i]]$phi
+  tau2_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$tau2
+  X_pred[1:n_save + (i-1)*n_save, ] <- out[[i]]$X
+  xi_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$xi
+  R_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$R
+}          
+```
+
+
+
+```{r other-models, message=FALSE, include=FALSE}
+
+if (file.exists(here::here("manuscript", "mvgp", "appendix", "fit", 
+                           "other-models-no-analog-appendix.RData"))) {
+  load(file=here::here("manuscript", "mvgp", "appendix", "fit", 
+                       "other-models-no-analog-appendix.RData"))
+} else {
+  y_train_prop <- as.matrix(y_train_prop)
+  
+  ## WA reconstruction - subset to deal with all zero occurrence species
+  zeros_idx <- which(apply(y_train_prop, 2, sum) == 0)
+  if (length(zeros_idx) > 0) {
+    modWA <- rioja::WA(y_train_prop[, - zeros_idx], X_train)
+    predWA <- predict(modWA, y_test_prop[, - zeros_idx], sse=TRUE, nboot=1000)
+  } else {
+    ## no data to subset
+    modWA <- rioja::WA(y_train_prop, X_train)
+    predWA <- predict(modWA, y_test_prop, sse=TRUE, nboot=1000)      
+  }
+  
+  pred_mu_WA <- predWA$fit[, 1]
+  pred_sd_WA <- sqrt(predWA$v1.boot[, 1]^2 + predWA$v2.boot[1]^2)
+  
+  ## MLRC reconstruction - subset to deal with all zero occurrence species
+  zeros_idx <- which(apply(y_train_prop, 2, sum) == 0)
+  if (length(zeros_idx) > 0) {
+    modMLRC <- rioja::MLRC(y_train_prop[, - zeros_idx], X_train)
+    predMLRC <- predict(modMLRC, y_test_prop[, - zeros_idx],
+                        sse=TRUE, nboot=1000)
+  } else {
+    modMLRC <- rioja::MLRC(y_train_prop, X_train)
+    predMLRC <- predict(modMLRC, y_test_prop, sse=TRUE, nboot=1000)
+  }
+  
+  pred_mu_MLRC <- predMLRC$fit[, 1]
+  pred_sd_MLRC <- sqrt(predMLRC$v1.boot[, 1]^2 + predMLRC$v2.boot[1]^2)
+  
+  ## Modern analogue technique
+  modMAT <- MAT(y_train_prop, X_train, k=20, lean=FALSE)
+  predMAT <- predict(modMAT, y_test_prop, k=10, sse=TRUE, n.boot=1000)
+  
+  pred_mu_MAT <- predMAT$fit.boot[, 2]
+  pred_sd_MAT <- sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2])
+  
+  
+  save(pred_mu_WA, pred_sd_WA, pred_mu_MLRC, pred_sd_MLRC, 
+       pred_mu_MAT, pred_sd_MAT, 
+       file=here::here("manuscript", "mvgp", "appendix", "fit", 
+                       "other-models-no-analog-appendix.RData"))
+}
+```
+
+```{r fit-gam}
+## Fit no-analog using B-spline model
+if (file.exists(here::here("manuscript", "mvgp", "appendix", "fit",
+                           "testate-no-analog-gam.RData"))) {
+  ## load mcmc
+  load(file=here::here("manuscript", "mvgp", "appendix", "fit",
+                       "testate-no-analog-gam.RData"))
+} else {
+  
+  ## potentially long running MCMC code
+  parallelChains <- function (n_chains) {
+    Rcpp::sourceCpp(here::here("mcmc", "mcmc-dm-basis.cpp"))
+    out <- coda::mcmc(mcmcRcpp(as.matrix(y_train), X_train, as.matrix(y_test), 
+                               params, n_chain=n_chains, 
+                               file_name=here::here("manuscript", "mvgp",
+                                                    "appendix", "progress",               
+                                                    "testate-no-analog-gam.txt")))
+  }
+  
+  ## Initalize multicore
+  sfInit(parallel=TRUE, cpus=4)
+  sfClusterSetupRNG()
+  sfExport("y_train", "X_train", "y_test", "params")
+  sfLibrary(coda)
+  sfLibrary(here)
+  
+  ## create temporary progress file  
+  file.create(here::here("manuscript", "mvgp", "appendix", "progress", 
+                         "testate-no-analog-gam.txt"))
+  
+  ## run MCMC
+  out <- sfLapply(1:4, parallelChains)
+  
+  sfStop()
+  
+  save(out, file=here::here("manuscript", "mvgp", "appendix", "fit",
+                            "testate-no-analog-gam.RData"))
+  
+  
+  Rhat <- make_gelman_rubin(out)
+  png(file=here::here("manuscript", "mvgp", "appendix", "Rhat-no-analog-gam.png"),
+      width=6, height=6, units="in", res=400)
+  layout(matrix(1:9, 3, 3))
+  hist(Rhat[grepl("beta", names(Rhat))], main = "Rhat for beta")
+  hist(Rhat[grepl("alpha", names(Rhat))], main = "Rhat for alpha")
+  hist(Rhat[grepl("X", names(Rhat))], main = "Rhat for X")
+  hist(Rhat, main="All parameters")
+  dev.off()
+}
+```
+
+
+```{r posterior}
+## extract posterior samples
+samples <- convert_to_coda(out)
+
+n_chains <- 4
+n_save <- dim(samples[[1]])[1] 
+n_samples <- n_save*n_chains
+
+mu_post <- matrix(0, n_samples, d)
+beta_post <- array(0, dim=c(n_samples, dim(out[[1]]$beta)[2], d))
+alpha_post <-  array(0, dim=c(n_samples, N-N_pred, d))
+alpha_pred_post <-  array(0, dim=c(n_samples, N_pred, d))
+X_pred_gam <- matrix(0,  n_samples, N_pred)
+
+for(i in 1:n_chains){
+  beta_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$beta
+  alpha_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha
+  alpha_pred_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha_pred
+  X_pred_gam[1:n_save + (i-1)*n_save, ] <- out[[i]]$X
+}          
+```
+
+
+```{r score-models}
+N_no_analog <- length(analog_idx)
+coverage <- matrix(0, N_no_analog, 5)
+MSPE <- matrix(0, N_no_analog, 5)
+MAE <- matrix(0, N_no_analog, 5)
+CRPS <- matrix(0, N_no_analog, 5)
+
+MSPE[, 1] <- (X_test - apply(X_pred, 2, mean))^2
+MSPE[, 2] <- (X_test - apply(X_pred_gam, 2, mean))^2
+MSPE[, 3] <- (X_test - pred_mu_WA)^2
+MSPE[, 4] <- (X_test - pred_mu_MLRC)^2
+MSPE[, 5] <- (X_test - pred_mu_MAT)^2
+
+MAE[, 1] <- abs(X_test - apply(X_pred, 2, median))
+MAE[, 2] <- abs(X_test - apply(X_pred_gam, 2, median))
+MAE[, 3] <- abs(X_test - pred_mu_WA)
+MAE[, 4] <- abs(X_test - pred_mu_MLRC)
+MAE[, 5] <- abs(X_test - pred_mu_MAT)
+
+coverage[, 1] <- 
+  (X_test > apply(X_pred, 2, quantile, prob=0.025)) & 
+  (X_test < apply(X_pred, 2, quantile, prob=0.975))
+coverage[, 2] <-
+  (X_test > apply(X_pred_gam, 2, quantile, prob=0.025)) &
+  (X_test < apply(X_pred_gam, 2, quantile, prob=0.975))
+coverage[, 3] <- 
+  (X_test > (pred_mu_WA - 2 * pred_sd_WA)) &
+  (X_test < (pred_mu_WA + 2 * pred_sd_WA))
+coverage[, 4] <-
+  (X_test > (pred_mu_MLRC - 2 * pred_sd_MLRC)) &
+  (X_test < (pred_mu_MLRC + 2 * pred_sd_MLRC))
+coverage[, 5] <- 
+  (X_test > (pred_mu_MAT - 2 * pred_sd_MAT)) &
+  (X_test < (pred_mu_MAT + 2 * pred_sd_MAT))
+
+
+CRPS[, 1] <- makeCRPS(X_pred, X_test, dim(X_pred)[1])
+CRPS[, 2] <- makeCRPS(X_pred_gam, X_test, dim(X_pred_gam)[1])
+CRPS[, 3] <- MAE[, 3]
+CRPS[, 4] <- MAE[, 4]
+CRPS[, 5] <- MAE[, 5]
+
+model_names <- c("MVGP", "GAM", "WA", "MLRC", "MAT")
+colnames(MSPE) <- model_names
+colnames(MAE) <- model_names
+colnames(coverage) <- model_names
+colnames(CRPS) <- model_names
+
+
+results <- rbind(
+  apply(CRPS, 2, mean), apply(MSPE, 2, mean),
+  apply(MAE, 2, mean), 100*apply(coverage, 2, mean))
+rownames(results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
+library(xtable)
+print(xtable(t(results), digits=4), 
+      file=here("results", "appendix-booth.tex"), 
+      floating=FALSE)
+```
+
+
+
+
+
+```{r readData-pollen, echo=FALSE, include=FALSE, results='hide'}
+dat <- read.csv(here("data", "Reduced.Taxa.calibration.3.23.17.csv"), 
+                stringsAsFactors=FALSE, header=TRUE)
+N <- length(dat$ACERX[-1])
+d <- 16
+y <- matrix(c(as.numeric(dat$ACERX[-1]), as.numeric(dat$BETULA[-1]), 
+              as.numeric(dat$Sum.Other.Conifer[-1]), as.numeric(dat$LARIXPSEU[-1]), 
+              as.numeric(dat$Sum.Other.Deciduous[-1]), as.numeric(dat$FAGUS[-1]), 
+              as.numeric(dat$FRAXINUX[-1]), as.numeric(dat$Sum.Other.Herbaceous[-1]), 
+              as.numeric(dat$Sum.Prairie.Herbs[-1]), as.numeric(dat$Other[-1]), 
+              as.numeric(dat$PICEAX[-1]), as.numeric(dat$PINUSX[-1]), 
+              as.numeric(dat$QUERCUS[-1]), as.numeric(dat$TILIA[-1]), 
+              as.numeric(dat$TSUGAX[-1]), as.numeric(dat$ULMUS[-1])), N, d)
+
+## Adjust for half counts
+y <- ceiling(y)
+colnames(y) <- names(dat)[5:20]
+
+X_annual <- as.numeric(dat$tmean_annual[-1])
+X <- as.numeric(dat$tmean_07[-1])
+
+mean_X <- mean(X)
+sd_X <- sd(X)
+X <- (X - mean_X) / sd_X
+
+## transform the data to percentages for use in transfer function models
+y_prop <- y
+for (i in 1:N) {
+  y_prop[i, ] <- y_prop[i, ] / sum(y_prop[i, ])
+}
+
+```
+
+
+
+
+```{r sim-no-analog-pollen, warning=FALSE, message=FALSE, cache=TRUE}
+## Simulate a "no-analog" situation
+modMATDist <- MAT(as.data.frame(y_prop), X, k=10, lean=FALSE)
+
+mod_dists <- tibble(set = "mod", distance = as.vector(modMATDist$dist.n))
+
+## 0.575 cut-off chosen so the validation set is approximately the same size
+## as one of the 12-fold cross-validation sets
+analog_idx <- which(apply(modMATDist$dist.n, 1, min)  > 0.08)
+# length(analog_idx) ## 14
+# 152/12  ## 13
+
+y_train <- y[-analog_idx, ]
+y_test <- y[analog_idx, ]
+X_train <- X[-analog_idx]
+X_test <- X[analog_idx]
+y_train_prop <- y_train
+for (i in 1:nrow(y_train)) {
+  y_train_prop[i, ] <- y_train_prop[i, ] / sum(y_train_prop[i, ])
+}
+y_test_prop <- y_test
+for (i in 1:nrow(y_test)) {
+  y_test_prop[i, ] <- y_test_prop[i, ] / sum(y_test_prop[i, ])
+}
+N_pred <- dim(y_test)[1]
+
+
+modMATDistTrain <- MAT(as.data.frame(y_train_prop), X_train, k=10, lean=FALSE)
+predMATDist <- predict(modMATDistTrain, as.data.frame(y_test_prop),
+                       k=10, sse=TRUE, n.boot=1000)
+mod_dists <- tibble(set = "mod", distance = as.vector(modMATDistTrain$dist.n))
+pred_dists <- tibble(set = "pred", distance = as.vector(predMATDist$dist.n))
+
+MAT_dists <- bind_rows(mod_dists, pred_dists)
+
+
+MAT_dists_plot <- ggplot(MAT_dists, aes(distance, fill=set)) +
+  geom_density(alpha=0.7, adjust=1, colour="grey50") + 
+  labs(x="square chord distance") + 
+  scale_fill_discrete(name=element_blank(), breaks=c("mod", "pred"),
+                      labels=c("Training Set", "Reconstruction Set")) +
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        axis.text.x = element_text(size = 22), 
+        axis.text.y = element_text(size = 22),
+        axis.title.x = element_text(size = 22), 
+        axis.title.y = element_text(size = 22),
+        legend.text=element_text(size=30))
+
+
+png(file=here::here("manuscript", "mvgp", "appendix", "pollen-analog-distance.png"),
+    width=18, height=6, units="in", res=400)
+MAT_dists_plot
+dev.off()
+```
+
+
+```{r setup-fit-pollen}
+y <- as.matrix(y)
+# mean_X <- mean(X)
+# sd_X <- sd(X)
+# X <- (X - mean_X) / sd_X
+X_knots <- seq(min(X, na.rm=TRUE)-1.25*sd(X, na.rm=TRUE), 
+               max(X, na.rm=TRUE)+1.25*sd(X, na.rm=TRUE), length=n_knots)
+
+params <- list(n_adapt=50000, n_mcmc=150000, n_thin=150, 
+               X_knots=X_knots, message=500)
+
+```
+
+
+```{r fit-pollen}
+library(snowfall)
+## Fit no-analog using B-spline model
+if (file.exists(here::here("manuscript", "mvgp", "appendix",
+                           "fit", "pollen-no-analog.RData"))) {
+  ## load mcmc
+  load(file=here::here("manuscript", "mvgp", "appendix",
+                       "fit", "pollen-no-analog.RData"))
+} else {
+  
+  ## potentially long running MCMC code
+  parallelChains <- function (n_chains) {
+    Rcpp::sourceCpp(here::here("mcmc", "mcmc-dirichlet-multinomial-mvgp.cpp"))
+    out <- coda::mcmc(mcmcRcpp(as.matrix(y_train), X_train, as.matrix(y_test), 
+                               params, n_chain=n_chains, 
+                               file_name=here::here("manuscript", "mvgp", "appendix",
+                                                    "progress", "pollen-no-analog.txt")))
+    
+  }
+  
+  ## Initalize multicore
+  sfInit(parallel=TRUE, cpus=4)
+  sfClusterSetupRNG()
+  sfExport("y_train", "X_train", "y_test", "params")
+  sfLibrary(coda)
+  sfLibrary(here)
+  
+  ## create temporary progress file  
+  file.create(here::here("manuscript", "mvgp", "appendix",
+                         "progress", "pollen-no-analog.txt"))
+  
+  ## run MCMC
+  out <- sfLapply(1:4, parallelChains)
+  
+  sfStop()
+  
+  save(out, file=here::here("manuscript", "mvgp", "appendix", "fit",
+                            "pollen-no-analog.RData"))
+  
+  Rhat <- make_gelman_rubin(out)
+  png(file=here::here("manuscript", "mvgp", "appendix", 
+                      "Rhat-no-analog-appendix-pollen.png"),
+      width=6, height=6, units="in", res=400)
+  layout(matrix(1:9, 3, 3))
+  hist(Rhat[grepl("eta", names(Rhat))], main = "Rhat for eta")
+  hist(Rhat[grepl("mu", names(Rhat))], main = "Rhat for mu")
+  hist(Rhat[grepl("alpha", names(Rhat))], main = "Rhat for alpha")
+  hist(Rhat[grepl("zeta", names(Rhat))], main = "Rhat for zeta")
+  hist(Rhat[grepl("tau2", names(Rhat))], main = "Rhat for tau2")
+  hist(Rhat[grepl("X", names(Rhat))], main = "Rhat for X")
+  hist(Rhat[grepl("xi", names(Rhat))], main = "Rhat for xi")
+  hist(Rhat[grepl("phi", names(Rhat))], main = "Rhat for phi")
+  hist(Rhat, main="All parameters")
+  dev.off()
+}
+```
+
+
+```{r process-samples-pollen}
+## extract posterior samples
+samples <- convert_to_coda(out)
+
+n_chains <- 4
+n_save <- dim(samples[[1]])[1] 
+n_samples <- n_save*n_chains
+
+mu_post <- matrix(0, n_samples, d)
+eta_star_post <- array(0, dim=c(n_samples, n_knots, d))
+zeta_post <-  array(0, dim=c(n_samples, N-N_pred, d))
+alpha_post <-  array(0, dim=c(n_samples, N-N_pred, d))
+zeta_pred_post <-  array(0, dim=c(n_samples, N_pred, d))
+alpha_pred_post <-  array(0, dim=c(n_samples, N_pred, d))
+phi_post <- rep(0,  n_samples)
+tau2_post <- matrix(0,  n_samples, d)
+X_pred <- matrix(0,  n_samples, N_pred)
+xi_post <- array(0,  dim=c(n_samples, choose(d, 2)))
+R_post <- array(0, dim=c(n_samples, d, d))
+
+for(i in 1:n_chains){
+  mu_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$mu
+  eta_star_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$eta_star
+  zeta_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$zeta
+  alpha_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha
+  zeta_pred_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$zeta_pred
+  alpha_pred_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha_pred
+  phi_post[1:n_save + (i-1)*n_save] <- out[[i]]$phi
+  tau2_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$tau2
+  X_pred[1:n_save + (i-1)*n_save, ] <- out[[i]]$X
+  xi_post[1:n_save + (i-1)*n_save, ] <- out[[i]]$xi
+  R_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$R
+}          
+```
+
+
+```{r fit-gam-pollen}
+## Fit no-analog using B-spline model
+if (file.exists(here::here("manuscript", "mvgp", "appendix", "fit",
+                           "pollen-no-analog-gam.RData"))) {
+  ## load mcmc
+  load(file=here::here("manuscript", "mvgp", "appendix", "fit",
+                       "pollen-no-analog-gam.RData"))
+} else {
+  
+  ## potentially long running MCMC code
+  parallelChains <- function (n_chains) {
+    Rcpp::sourceCpp(here::here("mcmc", "mcmc-dm-basis.cpp"))
+    out <- coda::mcmc(mcmcRcpp(as.matrix(y_train), X_train, as.matrix(y_test), 
+                               params, n_chain=n_chains, 
+                               file_name=here::here("manuscript", "mvgp",
+                                                    "appendix", "progress",               
+                                                    "pollen-no-analog-gam.txt")))
+  }
+  
+  ## Initalize multicore
+  sfInit(parallel=TRUE, cpus=4)
+  sfClusterSetupRNG()
+  sfExport("y_train", "X_train", "y_test", "params")
+  sfLibrary(coda)
+  sfLibrary(here)
+  
+  ## create temporary progress file  
+  file.create(here::here("manuscript", "mvgp", "appendix", "progress", 
+                         "pollen-no-analog-gam.txt"))
+  
+  ## run MCMC
+  out <- sfLapply(1:4, parallelChains)
+  
+  sfStop()
+  
+  save(out, file=here::here("manuscript", "mvgp", "appendix", "fit",
+                            "pollen-no-analog-gam.RData"))
+  
+  
+  Rhat <- make_gelman_rubin(out)
+  png(file=here::here("manuscript", "mvgp", "appendix", "Rhat-no-analog-pollen-gam.png"),
+      width=6, height=6, units="in", res=400)
+  layout(matrix(1:9, 3, 3))
+  hist(Rhat[grepl("eta", names(Rhat))], main = "Rhat for eta")
+  hist(Rhat[grepl("mu", names(Rhat))], main = "Rhat for mu")
+  hist(Rhat[grepl("alpha", names(Rhat))], main = "Rhat for alpha")
+  hist(Rhat[grepl("zeta", names(Rhat))], main = "Rhat for zeta")
+  hist(Rhat[grepl("tau2", names(Rhat))], main = "Rhat for tau2")
+  hist(Rhat[grepl("X", names(Rhat))], main = "Rhat for X")
+  hist(Rhat, main="All parameters")
+  dev.off()
+}
+```
+
+
+```{r process-gam-pollen}
+## extract posterior samples
+samples <- convert_to_coda(out)
+
+n_chains <- 4
+n_save <- dim(samples[[1]])[1] 
+n_samples <- n_save*n_chains
+
+mu_post <- matrix(0, n_samples, d)
+beta_post <- array(0, dim=c(n_samples, dim(out[[1]]$beta)[2], d))
+alpha_post <-  array(0, dim=c(n_samples, N-N_pred, d))
+alpha_pred_post <-  array(0, dim=c(n_samples, N_pred, d))
+X_pred_gam <- matrix(0,  n_samples, N_pred)
+
+for(i in 1:n_chains){
+  beta_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$beta
+  alpha_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha
+  alpha_pred_post[1:n_save + (i-1)*n_save, , ] <- out[[i]]$alpha_pred
+  X_pred_gam[1:n_save + (i-1)*n_save, ] <- out[[i]]$X
+}          
+```
+
+
+```{r other-models-pollen, message=FALSE, include=FALSE}
+
+if (file.exists(here::here("manuscript", "mvgp", "appendix",
+                           "fit", "other-models-no-analog-pollen-appendix.RData"))) {
+  load(file=here::here("manuscript", "mvgp", "appendix",
+                       "fit", "other-models-no-analog-pollen-appendix.RData"))
+} else {
+  y_test_prop <- as.data.frame(y_test_prop)
+  y_train_prop <- as.data.frame(y_train_prop)
+  
+  ## WA reconstruction - subset to deal with all zero occurrence species
+  zeros_idx <- which(apply(y_train_prop, 2, sum) == 0)
+  if (length(zeros_idx) > 0) {
+    modWA <- rioja::WA(y_train_prop[, - zeros_idx], X_train)
+    predWA <- predict(modWA, y_test_prop[, - zeros_idx], sse=TRUE, nboot=1000)
+  } else {
+    ## no data to subset
+    modWA <- rioja::WA(y_train_prop, X_train)
+    predWA <- predict(modWA, y_test_prop, sse=TRUE, nboot=1000)      
+  }
+  
+  pred_mu_WA <- predWA$fit[, 1]
+  pred_sd_WA <- sqrt(predWA$v1.boot[, 1]^2 + predWA$v2.boot[1]^2)
+  
+  ## MLRC reconstruction - subset to deal with all zero occurrence species
+  zeros_idx <- which(apply(y_train_prop, 2, sum) == 0)
+  if (length(zeros_idx) > 0) {
+    modMLRC <- rioja::MLRC(y_train_prop[, - zeros_idx], X_train)
+    predMLRC <- predict(modMLRC, y_test_prop[, - zeros_idx],
+                        sse=TRUE, nboot=1000)
+  } else {
+    modMLRC <- rioja::MLRC(y_train_prop, X_train)
+    predMLRC <- predict(modMLRC, y_test_prop, sse=TRUE, nboot=1000)
+  }
+  
+  pred_mu_MLRC <- predMLRC$fit[, 1]
+  pred_sd_MLRC <- sqrt(predMLRC$v1.boot[, 1]^2 + predMLRC$v2.boot[1]^2)
+  
+  ## Modern analogue technique
+  modMAT <- MAT(y_train_prop, X_train, k=20, lean=FALSE)
+  predMAT <- predict(modMAT, y_test_prop, k=10, sse=TRUE, n.boot=1000)
+  
+  pred_mu_MAT <- predMAT$fit.boot[, 2]
+  pred_sd_MAT <- sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2])
+  
+  save(pred_mu_WA, pred_sd_WA, pred_mu_MLRC, pred_sd_MLRC, 
+       pred_mu_MAT, pred_sd_MAT,  
+       file=here::here("manuscript", "mvgp", "appendix",
+                       "fit", "other-models-no-analog-pollen-appendix.RData"))
+}
+```
+
+
+
+```{r score-pollen}
+N_no_analog <- length(analog_idx)
+coverage <- matrix(0, N_no_analog, 5)
+MSPE <- matrix(0, N_no_analog, 5)
+MAE <- matrix(0, N_no_analog, 5)
+CRPS <- matrix(0, N_no_analog, 5)
+
+MSPE[, 1] <- (X_test - apply(X_pred, 2, mean))^2
+MSPE[, 2] <- (X_test - apply(X_pred_gam, 2, mean))^2
+MSPE[, 3] <- (X_test - pred_mu_WA)^2
+MSPE[, 4] <- (X_test - pred_mu_MLRC)^2
+MSPE[, 5] <- (X_test - pred_mu_MAT)^2
+
+MAE[, 1] <- abs(X_test - apply(X_pred, 2, median))
+MAE[, 2] <- abs(X_test - apply(X_pred_gam, 2, median))
+MAE[, 3] <- abs(X_test - pred_mu_WA)
+MAE[, 4] <- abs(X_test - pred_mu_MLRC)
+MAE[, 5] <- abs(X_test - pred_mu_MAT)
+
+coverage[, 1] <- 
+  (X_test > apply(X_pred, 2, quantile, prob=0.025)) & 
+  (X_test < apply(X_pred, 2, quantile, prob=0.975))
+coverage[, 2] <- 
+  (X_test > apply(X_pred_gam, 2, quantile, prob=0.025)) &
+  (X_test < apply(X_pred_gam, 2, quantile, prob=0.975))
+coverage[, 3] <- 
+  (X_test > (pred_mu_WA - 2 * pred_sd_WA)) &
+  (X_test < (pred_mu_WA + 2 * pred_sd_WA))
+coverage[, 4] <-
+  (X_test > (pred_mu_MLRC - 2 * pred_sd_MLRC)) &
+  (X_test < (pred_mu_MLRC + 2 * pred_sd_MLRC))
+coverage[, 5] <- 
+  (X_test > (pred_mu_MAT - 2 * pred_sd_MAT)) &
+  (X_test < (pred_mu_MAT + 2 * pred_sd_MAT))
+
+
+CRPS[, 1] <- makeCRPS(X_pred, X_test, dim(X_pred)[1])
+CRPS[, 2] <- makeCRPS(X_pred_gam, X_test, dim(X_pred_gam)[1])
+CRPS[, 3] <- MAE[, 3]
+CRPS[, 4] <- MAE[, 4]
+CRPS[, 5] <- MAE[, 5]
+
+model_names <- c("MVGP", "GAM", "WA", "MLRC", "MAT")
+colnames(MSPE) <- model_names
+colnames(MAE) <- model_names
+colnames(coverage) <- model_names
+colnames(CRPS) <- model_names
+
+results <- rbind(
+  apply(CRPS, 2, mean), apply(MSPE, 2, mean),
+  apply(MAE, 2, mean), 100*apply(coverage, 2, mean))
+rownames(results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
+library(xtable)
+print(xtable(t(results), digits=4), 
+      file=here("results", "appendix-pollen.tex"), 
+      floating=FALSE)
+```
+
+

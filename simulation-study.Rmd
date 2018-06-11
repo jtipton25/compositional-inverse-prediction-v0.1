@@ -23,6 +23,7 @@ library(randomForest)
 library(xtable)
 library(gridExtra)
 library(knitr)
+library(rioja)
 library(analogue)
 library(here)
 library(GGally)
@@ -35,26 +36,22 @@ knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
 ##
 
 ## simulate the cholesky of the correlation matrix
-source(here("functions", "make-lkj.R"))
+source(here::here("functions", "make-lkj.R"))
 
 ## simulate the correlation matrix
-source(here("functions", "make-correlation-matrix.R"))
+source(here::here("functions", "make-correlation-matrix.R"))
 
 ## layout multiple ggplot objects in one plot
-source(here("functions", "multiplot.R"))
+source(here::here("functions", "multiplot.R"))
 
 ## load function to convert MCMC output to CODA object for diagnostics
-source(here("functions", "convert-to-coda.R"))
+source(here::here("functions", "convert-to-coda.R"))
 
 ## load Gelman-Rubin diagnostic for lack of convergence
-source(here("functions", "make_gelman_rubin.R"))
+source(here::here("functions", "make_gelman_rubin.R"))
 
-## evaluate a probabilistic predictive distribution using CRPS score
-Rcpp::sourceCpp(here("functions", "makeCRPS.cpp"))
-
-## evaluate a Gaussian predictive distribution summarized by mean and 
-## standard deviation using CRPS score
-source(here("functions", "makeCRPSGauss.R"))
+## load CRPS function
+Rcpp::sourceCpp(here::here("functions", "makeCRPS.cpp"))
 
 ##
 ## Setup MCMC parameters
@@ -62,7 +59,7 @@ source(here("functions", "makeCRPSGauss.R"))
 
 n_adapt <- 150000
 n_mcmc <- 150000
-n_thin <- 100
+n_thin <- 150
 n_chains <- 4
 ## B-spline degrees of freedom parameter
 df <- 6
@@ -329,9 +326,9 @@ This model took 2.9 hours running 4 mcmc chains in parallel on a 2017 iMac with 
 
 
 ```{r fitDM, echo=FALSE, message=FALSE, warning=FALSE, eval=TRUE}
-if (file.exists(here("model-fit", "fitDM.RData"))) {
+if (file.exists(here::here("model-fit", "fitDM.RData"))) {
   ## Load MCMC run
-  load(here("model-fit", "fitDM.RData"))
+  load(here::here("model-fit", "fitDM.RData"))
 } else {
   ##    
   ## Long running MCMC
@@ -347,11 +344,11 @@ if (file.exists(here("model-fit", "fitDM.RData"))) {
   
   parallelChains <- function (n_chains) {
     ## compile the c++ code, this requires Rcpp to be installed
-    Rcpp::sourceCpp(here("mcmc", "mcmc-dirichlet-multinomial-mvgp.cpp"))
+    Rcpp::sourceCpp(here::here("mcmc", "mcmc-dirichlet-multinomial-mvgp.cpp"))
     # run the MCMC
     out <- mcmc(mcmcRcpp(y[train, ], X[train], y[test, ],
                          params, n_chain=n_chains, corr_function="exponential",
-                         file_name=here("model-fit", "progress", "DM-sim.txt")))
+                         file_name=here::here("model-fit", "progress", "DM-sim.txt")))
     return(out)
   }
   
@@ -365,23 +362,23 @@ if (file.exists(here("model-fit", "fitDM.RData"))) {
   
   ## create progress file and start MCMC timing
   ## 
-  file.create(here("model-fit", "progress", "DM-sim.txt"))
+  file.create(here::here("model-fit", "progress", "DM-sim.txt"))
   start <- Sys.time()
-  sink(here("model-fit", "progress", "DM-sim.txt"))
+  sink(here::here("model-fit", "progress", "DM-sim.txt"))
   print(paste("MCMC started at", start))
   sink()
   ## run MCMC  
   out <- sfLapply(1:4, parallelChains)
   
   ## end timing
-  sink(here("model-fit", "progress", "DM-sim.txt"), append = TRUE)
+  sink(here::here("model-fit", "progress", "DM-sim.txt"), append = TRUE)
   print(Sys.time() - start)
   sink()
 
   ## stop the computing cluster
   sfStop()
 
-  save(out, X_knots, n_mcmc, n_thin, file=here("model-fit", "fitDM.RData"))
+  save(out, X_knots, n_mcmc, n_thin, file=here::here("model-fit", "fitDM.RData"))
 }
 ```
 
@@ -449,7 +446,7 @@ max(unlist(na.omit(Rhat)))
 ## MCMC diagnostics
 ## disable the cat function to prevent RMarkdown output
 invisible(capture.output(
-  mcmcplot(out, dir=here("model-fit", "diagnostics/"), filename="dm-sim", 
+  mcmcplot(out, dir=here::here("model-fit", "diagnostics/"), filename="dm-sim", 
            extension="html", random=20)
   ))
 ```
@@ -558,7 +555,7 @@ sim.df <- data.frame(Covariate=c(X_ci),
                      truth=rep(X[test][idx],
                                each=n_samples*0.95))
 
-# png(file=here("figures/dm-sim-predictions.png"), width=6, height=3,
+# png(file=here::here("figures/dm-sim-predictions.png"), width=6, height=3,
 #     units="in", res=400)
 ggplot(sim.df, aes(Observation, Covariate)) +
   geom_violin(position="identity") +
@@ -627,9 +624,9 @@ This model took 29 minutes running 4 mcmc chains in parallel on a 2017 iMac with
 
 
 ```{r fit-basis, echo=FALSE, message=FALSE, warning=FALSE, eval=TRUE}
-if (file.exists(here("model-fit", "fit-dm-basis.RData"))) {
+if (file.exists(here::here("model-fit", "fit-dm-basis.RData"))) {
   ## Load MCMC run
-  load(here("model-fit", "fit-dm-basis.RData"))
+  load(here::here("model-fit", "fit-dm-basis.RData"))
 } else {
   ##    
   ## Long running MCMC
@@ -640,10 +637,10 @@ if (file.exists(here("model-fit", "fit-dm-basis.RData"))) {
                  degree=3, df=df, message=message)
 
   parallelChains <- function (n_chains) {
-    Rcpp::sourceCpp(here("/mcmc/mcmc-dm-basis.cpp"))
+    Rcpp::sourceCpp(here::here("/mcmc/mcmc-dm-basis.cpp"))
     out <- coda::mcmc(mcmcRcpp(y[train, ], X[train], y[test, ], 
                                params, n_chain=n_chains, 
-                               file_name=here("model-fit", "progress",
+                               file_name=here::here("model-fit", "progress",
                                               "DM-basis-sim.txt")))
   }
   
@@ -658,9 +655,9 @@ if (file.exists(here("model-fit", "fit-dm-basis.RData"))) {
   ## create progress file and start MCMC timing
   ## 
   
-  file.create(here("model-fit", "progress", "DM-basis-sim.txt"))
+  file.create(here::here("model-fit", "progress", "DM-basis-sim.txt"))
   start <- Sys.time()
-  sink(here("model-fit", "progress", "DM-basis-sim.txt"))
+  sink(here::here("model-fit", "progress", "DM-basis-sim.txt"))
   print(paste("MCMC started at", start))
   sink()
   
@@ -668,14 +665,14 @@ if (file.exists(here("model-fit", "fit-dm-basis.RData"))) {
   out_gam <- sfLapply(1:4, parallelChains)
   
   ## end timing
-  sink(here("model-fit", "progress", "DM-basis-sim.txt"), append = TRUE)
+  sink(here::here("model-fit", "progress", "DM-basis-sim.txt"), append = TRUE)
   print(Sys.time() - start)
   sink()
 
   ## stop the snowfall cluster  
   sfStop()
     
-  save(out_gam, file=here("model-fit", "fit-dm-basis.RData"))
+  save(out_gam, file=here::here("model-fit", "fit-dm-basis.RData"))
 }
 ```
 
@@ -721,7 +718,7 @@ max(unlist(na.omit(Rhat)))
 ## MCMC diagnostics
 ## disable the cat function to prevent RMarkdown output
 invisible(capture.output(
-  mcmcplot(out_gam, dir=here("model-fit", "diagnostics"), filename="dm-sim-basis", 
+  mcmcplot(out_gam, dir=here::here("model-fit", "diagnostics"), filename="dm-sim-basis", 
            extension="html", random=20)
   ))
 ```
@@ -738,7 +735,7 @@ sim.df <- data.frame(Covariate=c(X_ci),
                      truth=rep(X[test][idx],
                                each=n_samples*0.95))
 
-# png(file=here("figures/dm-sim-gam-predictions.png"), width=6, height=3,
+# png(file=here::here("figures/dm-sim-gam-predictions.png"), width=6, height=3,
 #     units="in", res=400)
 ggplot(sim.df, aes(Observation, Covariate)) +
   geom_violin(position="identity") +
@@ -797,17 +794,36 @@ coverage_splines <- ( X_test >= X_025_splines) & ( X_test <= X_975_splines)
 zeros_idx <- which(colSums(y_train_prop) == 0)
 if (length(zeros_idx) > 0) {
   modWA <- rioja::WA(y_train_prop[, - zeros_idx], X_train)
-  predWA <- predict(modWA, y_test_prop[, - zeros_idx], sse=TRUE, nboot=1000)
+  predWA <- predict(modWA, y_test_prop[, - zeros_idx], sse=TRUE, nboot=1000, 
+                    keep.boot.data=TRUE)
 } else {
   ## no data to subset
   modWA <- rioja::WA(y_train_prop, X_train)
-  predWA <- predict(modWA, y_test_prop, sse=TRUE, nboot=1000)      
+  predWA <- predict(modWA, y_test_prop, sse=TRUE, nboot=1000,
+                    keep.boot.data=TRUE)      
+}
+n_train <- nrow(y_train_prop)
+n_test <- nrow(y_test_prop)
+n_boot <- 1000
+predWABoot <- matrix(0, n_test, n_boot)
+for (i in 1:n_boot) {
+  s <- sample(1:n_train, n_train, replace=TRUE)
+  y_train_boot <- y_train_prop[s, ]
+  X_train_boot <- X_train[s]
+  zeros_idx <- which(colSums(y_train_boot) == 0)
+  if (length(zeros_idx) > 0) {
+    modWABoot <- rioja::WA(y_train_boot[, - zeros_idx], X_train_boot)     
+    predWABoot[, i] <- predict(modWABoot, y_test_prop[, - zeros_idx], sse=FALSE, nboot=1)$fit[, 1]
+  } else {
+    modWABoot <- rioja::WA(y_train_boot, X_train_boot)     
+    predWABoot[, i] <- predict(modWABoot, y_test_prop, sse=FALSE, nboot=1)$fit[, 1]
+  }
 }
 
-
-CRPS_WA <- abs(predWA$fit[, 1] - X_test)
 # CRPS_WA <- makeCRPSGauss(predWA$fit[, 1], sqrt(predWA$v1.boot[, 1]), X_test)
-MAE_WA <- abs(predWA$fit[, 1] - X_test)
+CRPS_WA <- abs(apply(predWABoot, 1, median) - X_test)
+# MAE_WA <- abs(predWA$fit[, 1] - X_test)
+MAE_WA <- abs(apply(predWABoot, 1, median) - X_test)
 MSPE_WA <- (predWA$fit[, 1] - X_test)^2
 coverage_WA <- 
   (X_test >= (predWA$fit[, 1] - 2 * sqrt(predWA$v1.boot[, 1]^2 + 
@@ -824,17 +840,39 @@ zeros_idx <- which(colSums(y_train_prop) == 0)
 if (length(zeros_idx) > 0) {
   modMLRC <- rioja::MLRC(y_train_prop[, - zeros_idx], X_train)
   predMLRC <- predict(modMLRC, y_test_prop[, - zeros_idx],
-                      sse=TRUE, nboot=1000)
+                      sse=TRUE, nboot=1000, keep.boot.data=TRUE)
 } else {
   modMLRC <- rioja::MLRC(y_train_prop, X_train)
-  predMLRC <- predict(modMLRC, y_test_prop, sse=TRUE, nboot=1000)
+  predMLRC <- predict(modMLRC, y_test_prop, sse=TRUE, nboot=1000,
+                      keep.boot.data=TRUE)
 }
 
-CRPS_MLRC <- abs(predMLRC$fit[, 1] - X_test)
+n_train <- nrow(y_train_prop)
+n_test <- nrow(y_test_prop)
+n_boot <- 1000
+predMLRCBoot <- matrix(0, n_test, n_boot)
+for (i in 1:n_boot) {
+  s <- sample(1:n_train, n_train, replace=TRUE)
+  y_train_boot <- y_train_prop[s, ]
+  zeros_idx <- which(colSums(y_train_boot) == 0)
+  X_train_boot <- X_train[s]
+  if (length(zeros_idx) > 0) {
+    modMLRCBoot <- rioja::MLRC(y_train_boot[, - zeros_idx], X_train_boot, n.cut=0.1)
+    predMLRCBoot[, i] <- predict(modMLRCBoot, newdata=y_test_prop[, - zeros_idx], sse=TRUE,
+                                 nboot=1, verbose = FALSE)$fit.boot
+  } else {
+    modMLRCBoot <- rioja::MLRC(y_train_boot, X_train_boot, n.cut=0.1)
+    predMLRCBoot[, i] <- predict(modMLRCBoot, newdata=y_test_prop, sse=TRUE,
+                                 nboot=1, verbose = FALSE)$fit.boot
+  }
+}
+
 # CRPS_MLRC <- makeCRPSGauss(predMLRC$fit[, 1], sqrt(predMLRC$v1.boot[, 1]),
 #                       X_test)
+CRPS_MLRC <- abs(apply(predMLRCBoot, 1, median) - X_test) 
 MSPE_MLRC <- (predMLRC$fit[, 1] - X_test)^2
-MAE_MLRC <- abs(predMLRC$fit[, 1] - X_test)
+# MAE_MLRC <- abs(predMLRC$fit[, 1] - X_test)
+MAE_MLRC <- abs(apply(predMLRCBoot, 1, median) - X_test)
 coverage_MLRC <- 
   ( X_test >= (predMLRC$fit[, 1] - 2 * sqrt(predMLRC$v1.boot[, 1]^2 + 
                                               predMLRC$v2.boot[1]^2))) & 
@@ -849,9 +887,8 @@ train_df <- data.frame(moisture=X_train, y_train)
 test_df <- data.frame(y_test)
 rf <- randomForest(moisture ~ ., data = train_df)
 
-CRPS_rf <- abs(predict(rf, test_df) - X_test)
-# CRPS_rf <- makeCRPS(t(matrix(predict(rf, test_df, predict.all=TRUE)$individual, 
-#                           length(X_test), 500)), X_test, 500)
+CRPS_rf <- makeCRPS(t(matrix(predict(rf, test_df, predict.all=TRUE)$individual, 
+                          length(X_test), 500)), X_test, 500)
 MSPE_rf <- (predict(rf, test_df) - X_test)^2
 MAE_rf <- abs(predict(rf, test_df) - X_test)
 rf_CI <- t( apply( predict(rf, test_df, predict.all=TRUE)$individual, 1,
@@ -865,13 +902,26 @@ coverage_rf <- ( (X_test >= rf_CI[, 1]) & (X_test <= rf_CI[, 2]) )
 ##
 
 modMAT <- rioja::MAT(as.data.frame(y_train), X_train, k=20, lean=FALSE)
-predMAT <- predict(modMAT, as.data.frame(y_test), k=10, sse=TRUE, n.boot=1000)
-CRPS_MAT <- abs( predMAT$fit.boot[, 2] - X_test)
+predMAT <- predict(modMAT, as.data.frame(y_test), k=20, sse=TRUE, n.boot=1000)
+n_train <- nrow(y_train_prop)
+n_test <- nrow(y_test_prop)
+n_boot <- 1000
+predMATBoot <- matrix(0, n_test, n_boot)
+for (i in 1:n_boot) {
+  s <- sample(1:n_train, n_train, replace=TRUE)
+  y_train_boot <- y_train_prop[s, ]
+  X_train_boot <- X_train[s]
+  modMATBoot <- MAT(as.data.frame(y_train_boot), X_train_boot, k=20, lean=FALSE)
+  predMATBoot[, i] <- predict(modMATBoot, newdata=as.data.frame(y_test_prop), k=20, nboot=1)$fit[, 1]
+}
+
 # CRPS_MAT <- makeCRPSGauss(
 #   predMAT$fit.boot[, 2], 
 #   sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2]), X_test)
+CRPS_MAT <-  abs(apply(predMATBoot, 1, median) - X_test)
 MSPE_MAT <- (  predMAT$fit.boot[, 2] - X_test)^2
-MAE_MAT <- abs( predMAT$fit.boot[, 2] - X_test)
+# MAE_MAT <- abs( predMAT$fit.boot[, 2] - X_test)
+MAE_MAT <-  abs(apply(predMATBoot, 1, median) - X_test)
 coverage_MAT <- 
   ( X_test >=  predMAT$fit.boot[, 2] -
       2 *  sqrt(predMAT$v1.boot[, 2]^2+ predMAT$v2.boot[2])) & 
@@ -901,10 +951,10 @@ coverage <- data.frame(100/(length(test))*t(apply(coverage_out, 2, sum)))
 sim_results <- rbind(CRPS, MSPE, MAE, coverage)
 rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage rates")
 print(xtable(t(sim_results), digits=4), 
-      file=here("results/sim-dm.tex"),
+      file=here::here("results", "sim-dm.tex"),
       floating=FALSE)
 ```
 
 ```{r}
-kable(t(sim_results))
+kable(sim_results)
 ```
