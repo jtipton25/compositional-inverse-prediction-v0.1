@@ -5,7 +5,7 @@
 ##
 ##
 makeCV <- function (i, model_name=model_name, y_cv=y_cv, y_cv_prop=y_cv_prop, 
-                    X_cv=X_cv, params=params, folds=folds) {
+                    X_cv=X_cv, params=params, folds=folds, data_source = "pollen") {
   library(rioja)
   library(analogue)
   library(randomForest)
@@ -323,7 +323,7 @@ makeCV <- function (i, model_name=model_name, y_cv=y_cv, y_cv_prop=y_cv_prop,
                                showCompilerOutput = FALSE)
     
     sink(here("model-fit", "progress", 
-              "cross-validate", "dm-cv-bummer.txt"),
+              "cross-validate", paste0("dm-cv-bummer-", data_source, ".txt")),
          append=TRUE)
     
     cat(paste("Starting Cross-validation", i, "\n"))
