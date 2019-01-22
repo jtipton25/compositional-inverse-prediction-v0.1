@@ -689,11 +689,14 @@ include_graphics(here::here("figures", "pollen-fit2.png"))
 ## BUMMER in nimble
 
 ```{r bummer-nimble}
+n_mcmc <- 5000
+n_adapt <- 5000
+n_thin <- 10
 n_burn <- n_adapt
 # n_mcmc <- 150000
 # n_burn <- 5000
 ## one fake observation for the model to fit
-N_obs <- N_pred
+N_obs <- N-N_pred
 
 if (file.exists(here::here("model-fit", "fit-bummer-pollen.RData"))) {
   ## Load MCMC run
@@ -721,7 +724,9 @@ if (file.exists(here::here("model-fit", "fit-bummer-pollen.RData"))) {
     # ## Set up the mvgp model
     # source("~/mvgp/nimble/functions/bum-dm-model-initialization.R")
     ## MCMC fit
-    sink(paste("~/mvgp/nimble/progress/fit-bummer-dm-", n_chains, ".txt", sep=""),
+    sink(here::here("model-fit", "progress", 
+                    paste("fit-bummer-dm-", 
+                          n_chains, ".txt", sep="")),
          append=TRUE)
     cat(paste("Starting Chain", n_chains, "\n"))
     samples.fit <- runMCMC(Cmcmc.fit, niter=n_mcmc+n_burn, nchains=1, 
@@ -739,8 +744,9 @@ if (file.exists(here::here("model-fit", "fit-bummer-pollen.RData"))) {
   sfLibrary(nimble)
   
   ## create temporary progress file  
-  file.create(paste("~/mvgp/nimble/progress/fit-bummer-dm-", 
-                    1:n_chains, ".txt", sep=""))
+  file.create(here::here("model-fit", "progress", 
+                               paste("fit-bummer-dm-", 
+                                     1:n_chains, ".txt", sep="")))
   
   samples.fit <- sfLapply(1:4, parallelChains)
   
@@ -758,7 +764,9 @@ if (file.exists(here::here("model-fit", "fit-bummer-pollen.RData"))) {
 source('~/mvgp/nimble/functions/make_gelman_rubin.R')
 Rhat <- make_gelman_rubin(samples.fit)
 hist(Rhat)
+```
 
+```{r}
 ## Post-process
 # source("~/mvgp/nimble/functions/bummer-dm-post-processing.R")
 source("~/mvgp/nimble/functions/bummer-dm-post-processing.R")
@@ -766,28 +774,45 @@ layout(matrix(1:3, 3, 1))
 matplot(t(a_post), type='l')
 matplot(t(b_post), type='l')
 matplot(t(c_post), type='l')
+```
 
+```{r}
+layout(matrix(1:4, 2, 2))
+plot(s2_a, type='l')
+plot(mu_b, type='l')
+plot(sigma_b, type='l')
+plot(s2_c, type='l')
+```
+
+```{r}
 idx_X <- order(X)
 layout(matrix(1:3, 3 ,1))
 matplot(X[idx_X], apply(alpha_post[, , ], c(1, 2), mean)[idx_X, ], type='l')
+```
 
-
+```{r}
 layout(matrix(1, 1, 1))
-matplot(apply(X_post[, ], 1, mean), type='l',
+matplot(apply(X_post, 1, mean), type='l',
         ylim=c(-5, 5))
-matplot(apply(X_post[, ], 1, quantile, prob = 0.025), 
+matplot(apply(X_post, 1, quantile, prob = 0.025), 
         type='l', add=TRUE, lty=2)
-matplot(apply(X_post[, ], 1, quantile, prob = 0.975), 
+matplot(apply(X_post, 1, quantile, prob = 0.975), 
         type='l', add=TRUE, lty=2)
 lines(X[(N_obs+1):N], col = 'red')
+```
 
+```{r}
+plot(apply(X_post, 1, mean), X[(N_obs+1):N])
+```
+
+```{r}
 idx_X <- order(X[(N_obs+1):N])
 
 p_alpha_post <- alpha_post
-
+p_alpha_post <- aperm(p_alpha_post, c(3, 1, 2))
 for (i in 1:N) {
-  for (j in 1:nrow(alpha_post)) {
-  p_alpha_post[j, i, ] <- alpha_post[j, i, ] / sum(alpha_post[j, i, ])
+  for (j in 1:nrow(p_alpha_post)) {
+  p_alpha_post[j, i, ] <- p_alpha_post[j, i, ] / sum(p_alpha_post[j, i, ])
   }
 }
 p_alpha_post_mean <- apply(p_alpha_post, c(2, 3), mean)
@@ -800,13 +825,13 @@ species_names <- c("ACERX", "BETULA", "Conifer", "LARIXPSEU",
                    "PICEAX", "PINUSX", "QUERCUS", "TILIA", "TSUGAX",
                    "ULMUS")
 
-fitPlotData <- data.frame(species = factor(rep(colnames(y), each=N-N_obs),
+fitPlotData <- data.frame(species = factor(rep(colnames(y), each=N_obs),
                                                 levels=colnames(y)), 
-                          count=c(y_prop[1:(N-N_obs), ]), 
-                          depth=rep(X[1:(N-N_obs)], times=d), 
-                          p=c(p_alpha_post_mean[1:(N-N_obs), ]),
-                          p_lower = c(p_alpha_post_lower_95[1:(N-N_obs), ]),
-                          p_upper = c(p_alpha_post_upper_95[1:(N-N_obs), ]))
+                          count=c(y_prop[1:(N_obs), ]), 
+                          depth=rep(X[1:(N_obs)], times=d), 
+                          p=c(p_alpha_post_mean[1:(N_obs), ]),
+                          p_lower = c(p_alpha_post_lower_95[1:(N_obs), ]),
+                          p_upper = c(p_alpha_post_upper_95[1:(N_obs), ]))
 fitPlotData$species <- revalue(fitPlotData$species, 
                                c("Sum.Other.Deciduous"= "DECIDUOUS",
                                  "Sum.Other.Herbaceous"= "OTHER HERBS",
@@ -816,17 +841,51 @@ fitPlotData$species <- revalue(fitPlotData$species,
 
 g1 <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
   geom_point(alpha=0.25) + theme(legend.position="none") +
+  geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species,
+                  group=species), linetype=0, alpha=0.5) +
   ggtitle("Predicted response vs. X") + 
   geom_line(aes(x=depth, y=p, col = species), fitPlotData, lwd=1.25)
 
 g2 <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
   geom_point(alpha=0.25) + theme(legend.position="none") +
+  geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species,
+                  group=species), linetype=0, alpha=0.5) +
   ggtitle("Predicted response vs. X") + 
   geom_line(aes(x=depth, y=p, col = species), fitPlotData, lwd=1.25) + 
   facet_wrap( ~ species, ncol = 4)
 source("~/functions/multiplot.R")
 multiplot(g1, g2, cols=2)
 ```
+
+```{r}
+fitPlotHoldout <- data.frame(species = factor(rep(colnames(y), each=N-N_obs),
+                                                levels=colnames(y)), 
+                          count=c(y_prop[(N_obs+1):N, ]), 
+                          depth=rep(X[(N_obs+1):N], times=d), 
+                          p=c(p_alpha_post_mean[(N_obs+1):N, ]),
+                          p_lower = c(p_alpha_post_lower_95[(N_obs+1):N, ]),
+                          p_upper = c(p_alpha_post_upper_95[(N_obs+1):N, ]))
+
+
+
+g1 <- ggplot(fitPlotHoldout, aes(x=depth, y=count, color=species, group=species)) + 
+  geom_point(alpha=0.25) + theme(legend.position="none") +
+  geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species,
+                  group=species), linetype=0, alpha=0.5) +
+  ggtitle("Predicted response vs. X") + 
+  geom_line(aes(x=depth, y=p, col = species), fitPlotHoldout, lwd=1.25)
+
+g2 <- ggplot(fitPlotHoldout, aes(x=depth, y=count, color=species, group=species)) + 
+  geom_point(alpha=0.25) + theme(legend.position="none") +
+  geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species,
+                  group=species), linetype=0, alpha=0.5) +
+  ggtitle("Predicted response vs. X") + 
+  geom_line(aes(x=depth, y=p, col = species), fitPlotHoldout, lwd=1.25) + 
+  facet_wrap( ~ species, ncol = 4)
+source("~/functions/multiplot.R")
+multiplot(g1, g2, cols=2)
+```
+
 
 ## Cross-validation
 Cross-validation took 4.1 hours running 6 mcmc chains on a 12-fold cross-validation problem on a 2017 iMac with 4.2GHz processor.
@@ -847,8 +906,11 @@ set.seed(11)
 kfold <- 12
 folds <- cut(sample(1:N, N), breaks=kfold, labels=FALSE)
 
-params <- list(n_adapt=n_adapt, n_mcmc=n_mcmc, X_knots=X_knots,
-               message=1000, n_thin=n_thin)
+params <- list(n_adapt=n_adapt,
+               n_mcmc=n_mcmc,
+               X_knots=X_knots,
+               message=1000,
+               n_thin=n_thin)
 
 
 ## load cross validation function
@@ -876,7 +938,8 @@ sfExport("y_cv", "y_cv_prop", "X_cv", "folds", "makeCV", "params",
 for (model_name in models) {
   if (!file.exists(here::here("model-fit", paste0("dm-mvgp-cv-pollen-", 
                                                   model_name, ".RData")))) {
-    message(model_name)    ##
+    message(model_name)    
+    ##
     ## Long running CV
     ##
     start <- Sys.time()
@@ -891,9 +954,14 @@ for (model_name in models) {
       sink()
     }
     if (model_name == "BUMMER") {
+      ## Reduce mcmc iterations
+      params$n_adapt <- 1000
+      params$n_mcmc <- 1000
+      # params$n_thin <- 10
+      
       ## create temporary progress file  
       file.create(here::here("model-fit", "progress", "cross-validate", 
-                             "dm-cv-bummer.txt"))
+                             "dm-cv-bummer-pollen.txt"))
       
       sink(here::here("model-fit", "progress", "cross-validate", 
                       "dm-cv-bummer-pollen.txt"))
@@ -938,7 +1006,7 @@ sfStop()
 
 
 ```{r process-mvgp-CV-pollen, echo=FALSE, eval=TRUE, message=FALSE, include=FALSE, warning=FALSE}
-models <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF")
+models <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF", "BUMMER")
 CRPS_out <- matrix(0, length(models), N)
 MSPE_out <- matrix(0, length(models), N)
 MAE_out <- matrix(0, length(models), N)
@@ -959,10 +1027,10 @@ MSPE <- data.frame(t(apply(MSPE_out[-c(6, 7), ], 1, mean)))
 MAE <- data.frame(t(apply(MAE_out[-c(6, 7), ], 1, mean)))
 coverage <- data.frame(100/N*t(apply(coverage_out[-c(6, 7), ], 1, sum)))
 
-colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
-colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
-colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
-colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
+colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
+colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
+colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
+colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
 ```
 
 

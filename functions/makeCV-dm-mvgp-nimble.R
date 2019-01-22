@@ -232,127 +232,188 @@ makeCV <- function (i, model_name=model_name, y_cv=y_cv, y_cv_prop=y_cv_prop,
     n_adapt <- params$n_adapt
     n_thin <- params$n_thin
     
-    library(nimble)
-    source("~/mvgp/functions/dirichlet-multinomial-nimble.R")
-    ## Load the bummer code
-    source("~/mvgp/functions/make-bummer.R")
-    ## Load the BUMMER model
-    source("~/mvgp/nimble/functions/bummer-dm-model.R")
-    ## Set up the BUMMER model
-    # source("~/mvgp/nimble/functions/bummer-dm-model-initialization-cv.R")
-    ## Model Set-up
-    ## data
-    data.fit <- list(
-      Y = rbind(y_train, y_test),
-      X = c(X_train, rep(NA, nrow(y_test))))
+    # 
+    # library(nimble)
+    # source("~/mvgp/functions/dirichlet-multinomial-nimble.R")
+    # ## Load the bummer code
+    # source("~/mvgp/functions/make-bummer.R")
+    # ## Load the BUMMER model
+    # source("~/mvgp/nimble/functions/bummer-dm-model.R")
+    # ## Set up the BUMMER model
+    # # source("~/mvgp/nimble/functions/bummer-dm-model-initialization-cv.R")
+    # ## Model Set-up
+    # ## data
+    # data.fit <- list(
+    #   Y = rbind(y_train, y_test),
+    #   X = c(X_train, rep(NA, nrow(y_test))))
+    # 
+    # N <- nrow(data.fit$Y)
+    # N_obs <- nrow(y_train)
+    # 
+    # ## constants
+    # constants.fit = list(
+    #   d=d, 
+    #   N=N, 
+    #   N_obs=N_obs, 
+    #   mu_X=0, 
+    #   s_X=1, 
+    #   count=apply(data.fit$Y, 1, sum))
+    # 
+    # ## initial conditions
+    # inits.fit = list(
+    #   alpha=matrix(pmin(rgamma(nrow(data.fit$Y)*d, 1, 1), 5), N, d), 
+    #   a=rgamma(d, 1, 1),
+    #   b=rnorm(d), 
+    #   c=pmax(rgamma(d, 1, 1), 0.5), 
+    #   lambda_a=rgamma(d, 1, 1), 
+    #   s2_a=rgamma(1, 1, 1), 
+    #   mu_b=0, 
+    #   sigma_b=1,
+    #   lambda_c=rgamma(d, 1, 1), 
+    #   s2_c=rgamma(1, 1, 1))
+    # 
+    # ## dimensions
+    # dimensions.fit = list(alpha=dim(matrix(NA, N, d)),
+    #                       X=N, 
+    #                       Y=dim(matrix(NA, N, d)))
+    # 
+    # ## fit model
+    # model_fit <- nimbleModel(bummer_code, 
+    #                          inits=inits.fit,
+    #                          constants=constants.fit,
+    #                          data=data.fit, 
+    #                          dimensions=dimensions.fit)
+    # 
+    # 
+    # spec.fit <- configureMCMC(model_fit, thin=n_thin, print=TRUE)
+    # 
+    # ## Remove non-reflective RW samplers for a and c
+    # spec.fit$removeSamplers('a')
+    # spec.fit$removeSamplers('c')
+    # ## Add in reflective RW samplers for a and c
+    # for (jjj in 1:d) {
+    #   spec.fit$addSampler(target = paste('a[', jjj, ']', sep=''),
+    #                       type = 'RW', 
+    #                       control = list(reflective = TRUE))
+    #   spec.fit$addSampler(target = paste('c[', jjj, ']', sep=''),
+    #                       type = 'RW', 
+    #                       control = list(reflective = TRUE))
+    # }
+    # 
+    # ## Remove RW samplers for X
+    # spec.fit$removeSamplers('X')
+    # ## Add ESS sampler for X
+    # source('~/mvgp/nimble/functions/sampler-ess-univariate.R')
+    # for (iii in (N_obs+1):N) {
+    #   spec.fit$addSampler(target=paste('X[', iii, ']', sep=''), type='ess_univariate')
+    # }
+    # 
+    # 
+    # ## Add Monitors
+    # spec.fit$addMonitors(c('a', 'b', 'c', 'X',
+    #                        'alpha')) 
+    # 
+    # ## Build MCMC
+    # Rmcmc.fit <- buildMCMC(spec.fit)
+    # 
+    # ## Compile MCMC
+    # # Rmcmc.fit$run(n_mcmc)
+    # cm <- compileNimble(model_fit, showCompilerOutput = FALSE)
+    # 
+    # Cmcmc.fit <- compileNimble(Rmcmc.fit, project = model_fit,
+    #                            showCompilerOutput = FALSE)
+    # 
+    # sink(here("model-fit", "progress", 
+    #           "cross-validate", paste0("dm-cv-bummer-", data_source, ".txt")),
+    #      append=TRUE)
+    # 
+    # cat(paste("Starting Cross-validation", i, "\n"))
+    # 
+    # samples.fit <- runMCMC(
+    #   mcmc              = Cmcmc.fit, 
+    #   niter             = n_mcmc + n_adapt,
+    #   nchains           = 1, 
+    #   samplesAsCodaMCMC = TRUE)
+    # 
+    # sink()
+    # 
+    # ## remove the burn-in
+    # samples.fit <- samples.fit[-c(1:(n_adapt / n_thin)), ]
+    # 
+    # n_samples <- nrow(samples.fit)
+    # X_post <- matrix(0, length(X_test), n_samples)
+    # for (iii in (length(X_train)+1):N) {
+    #   X_post[iii-length(X_train), ] <- samples.fit[, paste("X[", iii, "]", sep="")]
+    # }
     
-    N <- nrow(data.fit$Y)
-    N_obs <- nrow(y_train)
     
-    ## constants
-    constants.fit = list(
-      d=d, 
-      N=N, 
-      N_obs=N_obs, 
-      mu_X=0, 
-      s_X=1, 
-      count=apply(data.fit$Y, 1, sum))
+    ## Use Stan...
+    library(rstan)
+    N <- nrow(y_train)
+    dat=list(N=N, d=d, X=X_train, y=matrix(y_train, N, d))
     
-    ## initial conditions
-    inits.fit = list(
-      alpha=matrix(pmin(rgamma(nrow(data.fit$Y)*d, 1, 1), 5), N, d), 
-      a=rgamma(d, 1, 1),
-      b=rnorm(d), 
-      c=pmax(rgamma(d, 1, 1), 0.5), 
-      lambda_a=rgamma(d, 1, 1), 
-      s2_a=rgamma(1, 1, 1), 
-      mu_b=0, 
-      sigma_b=1,
-      lambda_c=rgamma(d, 1, 1), 
-      s2_c=rgamma(1, 1, 1))
+    init_fun <- function() { list(
+      a=runif(d, 1, 10), 
+      mu=rnorm(d, 0, 1),
+      sigma2=runif(d, 1, 5), 
+      alpha=matrix(runif(N*d, 1, 5), N, d)) } 
     
-    ## dimensions
-    dimensions.fit = list(alpha=dim(matrix(NA, N, d)),
-                          X=N, 
-                          Y=dim(matrix(NA, N, d)))
-    
-    ## fit model
-    model_fit <- nimbleModel(bummer_code, 
-                             inits=inits.fit,
-                             constants=constants.fit,
-                             data=data.fit, 
-                             dimensions=dimensions.fit)
-    
-    
-    spec.fit <- configureMCMC(model_fit, thin=n_thin, print=TRUE)
-    
-    ## Remove non-reflective RW samplers for a and c
-    spec.fit$removeSamplers('a')
-    spec.fit$removeSamplers('c')
-    ## Add in reflective RW samplers for a and c
-    for (j in 1:d) {
-      spec.fit$addSampler(target = paste('a[', j, ']', sep=''),
-                          type = 'RW', 
-                          control = list(reflective = TRUE))
-      spec.fit$addSampler(target = paste('c[', j, ']', sep=''),
-                          type = 'RW', 
-                          control = list(reflective = TRUE))
-    }
-    
-    ## Remove RW samplers for X
-    spec.fit$removeSamplers('X')
-    ## Add ESS sampler for X
-    source('~/mvgp/nimble/functions/sampler-ess-univariate.R')
-    for (i in (N_obs+1):N) {
-      spec.fit$addSampler(target=paste('X[', i, ']', sep=''), type='ess_univariate')
-    }
-    
-    
-    ## Add Monitors
-    spec.fit$addMonitors(c('a', 'b', 'c', 'X',
-                           'alpha')) 
-    
-    ## Build MCMC
-    Rmcmc.fit <- buildMCMC(spec.fit)
-    
-    ## Compile MCMC
-    # Rmcmc.fit$run(n_mcmc)
-    cm <- compileNimble(model_fit, showCompilerOutput = FALSE)
-    
-    Cmcmc.fit <- compileNimble(Rmcmc.fit, project = model_fit,
-                               showCompilerOutput = FALSE)
-    
-    sink(here("model-fit", "progress", 
-              "cross-validate", paste0("dm-cv-bummer-", data_source, ".txt")),
+    sink(here("model-fit", "progress",
+    "cross-validate", paste0("dm-cv-bummer-", data_source, ".txt")),
          append=TRUE)
-    
+
     cat(paste("Starting Cross-validation", i, "\n"))
+
+    fit = stan(file="~/BayesComposition/bummer-dm.stan", 
+               iter=n_mcmc + n_adapt,
+               warmup = n_adapt,
+               verbose=FALSE, data=dat, chains=1, init=init_fun,
+               control=list(adapt_delta=0.99, stepsize=0.01,
+                            max_treedepth=15)) 
     
-    samples.fit <- runMCMC(
-      mcmc              = Cmcmc.fit, 
-      niter             = n_mcmc + n_adapt,
-      nchains           = 1, 
-      samplesAsCodaMCMC = TRUE)
+    ## extract samples
+    e = rstan::extract(fit, permuted = TRUE)
+    
+    ddirmult <- function(yy, alpha) {
+      yy <- as.numeric(yy)
+      sum_y <- sum(yy)
+      return(lgamma(apply(alpha, 1, sum)) - lgamma(sum_y + apply(alpha, 1, sum)) +
+                   apply(lgamma(t(yy + t(alpha))), 1, sum) - apply(lgamma(alpha), 1, sum))
+    }
+    n_iter <- dim(e$a)[1]
+    n_grid <- 500
+    N_pred <- dim(y_test)[1]
+    X_post <- matrix(0, n_iter, N_pred)
+    X_grid <- seq(from=-3, to=3, length=n_grid)
+    alpha_pred <- array(0, dim=c(n_iter, n_grid, d))
+    
+    for (k in 1:n_iter) {
+      if (k %% 10 == 0) {
+        message("Prediction iteration ", k, " out of ", n_iter)
+      }
+      for (ii in 1:n_grid) {
+        alpha_pred[k, ii, ] <- e$a[k, ] * exp( - (e$mu[k, ] - X_grid[ii])^2 / e$sigma2[k, ])
+      }
+      for (iii in 1:N_pred) {
+        pis_temp <- ddirmult(y_test[iii, ], alpha_pred[k, , ]) + dnorm(X_grid, 0, 1, log=TRUE)
+        pis <- exp(pis_temp - max(pis_temp))
+        pis <- pis / sum(pis)
+        X_post[k, iii] <- sample(X_grid, size=1, replace=FALSE, prob=pis)
+      }
+    }    
     
     sink()
     
-    ## remove the burn-in
-    samples.fit <- samples.fit[-c(1:(n_adapt / n_thin)), ]
     
-    n_samples <- nrow(samples.fit)
-    X_post <- matrix(0, length(X_test), n_samples)
-    for (i in length(X_test):N) {
-      X_post[i-N+1, ] <- samples.fit[, paste("X[", i, "]", sep="")]
-    }
     
     Rcpp::sourceCpp(here::here("functions", "makeCRPS.cpp"))
-    CRPS <- makeCRPS(t(X_post), X_test, n_samples)
-    MSPE <- (apply(X_post, 1, mean) - X_test)^2
-    MAE <- abs(apply(X_post, 1, mean) - X_test)
-    X_025 <- apply(X_post, 1, quantile, prob = 0.025)
-    X_975 <- apply(X_post, 1, quantile, prob = 0.975)
+    CRPS <- makeCRPS(X_post, X_test, n_iter)
+    MSPE <- (apply(X_post, 2, mean) - X_test)^2
+    MAE <- abs(apply(X_post, 2, mean) - X_test)
+    X_025 <- apply(X_post, 2, quantile, prob = 0.025)
+    X_975 <- apply(X_post, 2, quantile, prob = 0.975)
     coverage <- (X_test >= X_025) & (X_test <= X_975)
-    rm(samples.fit)
+    # rm(samples.fit)
   }
   return(list(CRPS=CRPS, MSPE=MSPE, MAE=MAE, coverage=coverage))
 }
