@@ -1005,10 +1005,10 @@ MSPE <- data.frame(t(apply(MSPE_out[-c(6, 7), ], 1, mean)))
 MAE <- data.frame(t(apply(MAE_out[-c(6, 7), ], 1, mean)))
 coverage <- data.frame(100/N*t(apply(coverage_out[-c(6, 7), ], 1, sum)))
 
-colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
-colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
-colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
-colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC")
+colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
+colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
+colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
+colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
 ```
 
 
