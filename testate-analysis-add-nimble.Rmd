@@ -1024,7 +1024,7 @@ print(xtable(t(sim_results), digits=4),
 
 
 ```{r}
-kable(sim_results)
+kable(t(sim_results), digits = 4)
 ```
 
 

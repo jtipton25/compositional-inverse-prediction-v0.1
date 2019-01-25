@@ -1,8 +1,10 @@
 ---
-title: "Multivariate Gaussian Process"
-author: "John Tipton"
-date: "\today"
-output: html_document  
+title: "Appendix S2: Simulation Study"
+output: pdf_document
+bibliography: multivariate-gaussian-process.bib
+citation_package: biblatex
+pandoc_options: ["--biblatex"]
+csl: institute-mathematical-statistics.csl
 ---
 
 
@@ -74,6 +76,13 @@ message <- 1000
 corr_function <- "exponential"
 ```
 
+
+# Simulation Study
+
+To evaluate the performance of the proposed inverse prediction framework, we conducted tw different simulation studies. First, we simulated data on the log-scale random effect $\boldsymbol{\alpha}_i$ (Equation (3) in the manuscript) setting $N=800$ observations where the covariate is observed, $\tilde{N}=200$ observations where the covariate is unobserved with $d=8$ species. The parameters used in simulation are $\mu \sim \operatorname{N}(0, 10^2)$, $\mathbf{R} \sim \operatorname{LKJ}(1)$, $\tau \sim \operatorname{gamma}(5, 5)$, $X \sim \operatorname{N}(0, 1)$, $\sigma^2 = 1$, $\phi = 1.25$, and $\boldsymbol{\varepsilon}_i \sim \operatorname{N} ( \mathbf{0}, \sigma^2 \mathbf{I})$. The Gaussian processes are simulated using a predicti
+
+
+
 ```{r simulation, tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=6, include=FALSE, eval=TRUE}
 set.seed(141)
 ## number of sites from which to simulate
@@ -130,13 +139,13 @@ zero_knots <- rep(0, n_knots)
 eta_star <- t(rmvn(d, zero_knots, chol(C_knots), isChol=TRUE))
 zeta <- Z_knots %*% eta_star %*% R_tau
 
-y <- t(mu + t(zeta)) + epsilon
+log_alpha <- t(mu + t(zeta)) + epsilon
 ```
 
 
 ```{r}
 simPlotData <- data.frame(species=as.factor(rep(1:d, each=N)), 
-                          response=c(y), 
+                          response=c(log_alpha), 
                           covariate=rep(X, times=d), 
                           zeta=c(t(mu + t(zeta))))
 
@@ -177,7 +186,7 @@ if (file.exists(here("model-fit", "fitSim.RData"))) {
   
   parallelChains <- function (n_chains) {
     Rcpp::sourceCpp(here("mcmc", "mcmc-mvgp.cpp"))
-    out <- mcmc(mcmcRcpp(y, X, params, n_chain=n_chains, 
+    out <- mcmc(mcmcRcpp(log_alpha, X, params, n_chain=n_chains, 
                          file_name=here("model-fit", "progress", "sim-fit.txt"), 
                          corr_function="exponential"))
   }
@@ -185,7 +194,7 @@ if (file.exists(here("model-fit", "fitSim.RData"))) {
   ## Initalize multicore
   sfInit(parallel=TRUE, cpus=4)
   sfClusterSetupRNG()
-  sfExport("y", "X", "params")
+  sfExport("log_alpha", "X", "params")
   sfLibrary(coda)
   sfLibrary(here)
   
@@ -497,8 +506,8 @@ coverage_splines <- ( X[(N_obs+1):N] >= X_025_splines) & ( X[(N_obs+1):N] <= X_9
 
 
 ## Random Forest
-train <- data.frame(moisture=X[1:N_obs], y[1:N_obs, ])
-test <- data.frame(y[(N_obs+1):N, ])
+train <- data.frame(moisture=X[1:N_obs], log_alpha[1:N_obs, ])
+test <- data.frame(log_alpha[(N_obs+1):N, ])
 rf <- randomForest(moisture ~ ., data = train)
 CRPS_rf <- makeCRPS(t(matrix(predict(rf, test, predict.all=TRUE)$individual,
                              N-N_obs, 500)), X[(N_obs+1):N], 500)
@@ -541,6 +550,10 @@ print(xtable(t(sim_results), digits=4), file=here("results", "sim-gaussian.tex")
 
 ```{r}
 kable(t(sim_results))
+CRPS_rf
+MAE_rf
+MSPE_rf
+coverage_rf
 ```
 
 
