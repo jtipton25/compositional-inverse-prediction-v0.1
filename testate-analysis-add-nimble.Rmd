@@ -676,195 +676,195 @@ dev.off()
 ```
 
 
-## BUMMER in nimble
+<!-- ## BUMMER in nimble -->
 
-```{r bummer-nimble}
-n_mcmc <- 5000
-n_adapt <- 5000
-n_thin <- 10
-n_burn <- n_adapt
-# n_mcmc <- 150000
-# n_burn <- 5000
-## one fake observation for the model to fit
-N_obs <- N-N_pred
+<!-- ```{r bummer-nimble} -->
+<!-- n_mcmc <- 5000 -->
+<!-- n_adapt <- 5000 -->
+<!-- n_thin <- 10 -->
+<!-- n_burn <- n_adapt -->
+<!-- # n_mcmc <- 150000 -->
+<!-- # n_burn <- 5000 -->
+<!-- ## one fake observation for the model to fit -->
+<!-- N_obs <- N-N_pred -->
 
-if (file.exists(here::here("model-fit", "fit-bummer-testate.RData"))) {
-  ## Load MCMC run
-  load(here::here("model-fit", "fit-bummer-testate.RData"))
-} else {
-  
-  ##    
-  ## Long running MCMC
-  ##
-  
-  ## Run MCMC
-  parallelChains <- function (n_chains) {
-    ## Load the Dirichlet-multinomial likelihood
-    source("~/mvgp/functions/dirichlet-multinomial-nimble.R")
-    ## Load the bummer code
-    source("~/mvgp/functions/make-bummer.R")
-    ## Load the mvgp model
-    source("~/mvgp/nimble/functions/bummer-dm-model.R")
-    ## Set up the mvgp model
-    source("~/mvgp/nimble/functions/bummer-dm-model-initialization.R")
-    # ## Load the bummer code
-    # source("~/mvgp/functions/make-bummer.R")
-    # ## Load the mvgp model
-    # source("~/mvgp/nimble/functions/bum-dm-model.R")
-    # ## Set up the mvgp model
-    # source("~/mvgp/nimble/functions/bum-dm-model-initialization.R")
-    ## MCMC fit
-    sink(here::here("model-fit", "progress", 
-                    paste("fit-bummer-dm-testate-", 
-                          n_chains, ".txt", sep="")),
-         append=TRUE)
-    cat(paste("Starting Chain", n_chains, "\n"))
-    samples.fit <- runMCMC(Cmcmc.fit, niter=n_mcmc+n_burn, nchains=1, 
-                           samplesAsCodaMCMC=TRUE)
-    sink()
-    return(mcmc(as.matrix(samples.fit[-(1:(n_burn/n_thin)), ])))
-  }
-  library(snowfall)
-  ## Initalize multicore
-  sfInit(parallel=TRUE, cpus=4)
-  sfClusterSetupRNG()
-  sfExport("y", "X", "d", "N", "N_obs", 
-           "n_burn", "n_mcmc", "n_thin")
-  sfLibrary(coda)
-  sfLibrary(nimble)
-  
-  ## create temporary progress file  
-  file.create(here::here("model-fit", "progress", 
-                               paste("fit-bummer-dm-testate-", 
-                                     1:n_chains, ".txt", sep="")))
-  
-  samples.fit <- sfLapply(1:4, parallelChains)
-  
-  sfStop()
-  
-  save(samples.fit, file=here::here("model-fit", "fit-bummer-testate.RData"))
-}
-```
+<!-- if (file.exists(here::here("model-fit", "fit-bummer-testate.RData"))) { -->
+<!--   ## Load MCMC run -->
+<!--   load(here::here("model-fit", "fit-bummer-testate.RData")) -->
+<!-- } else { -->
 
-## Process Model Output
+<!--   ##     -->
+<!--   ## Long running MCMC -->
+<!--   ## -->
 
-```{r process-mvgp}
+<!--   ## Run MCMC -->
+<!--   parallelChains <- function (n_chains) { -->
+<!--     ## Load the Dirichlet-multinomial likelihood -->
+<!--     source("~/mvgp/functions/dirichlet-multinomial-nimble.R") -->
+<!--     ## Load the bummer code -->
+<!--     source("~/mvgp/functions/make-bummer.R") -->
+<!--     ## Load the mvgp model -->
+<!--     source("~/mvgp/nimble/functions/bummer-dm-model.R") -->
+<!--     ## Set up the mvgp model -->
+<!--     source("~/mvgp/nimble/functions/bummer-dm-model-initialization.R") -->
+<!--     # ## Load the bummer code -->
+<!--     # source("~/mvgp/functions/make-bummer.R") -->
+<!--     # ## Load the mvgp model -->
+<!--     # source("~/mvgp/nimble/functions/bum-dm-model.R") -->
+<!--     # ## Set up the mvgp model -->
+<!--     # source("~/mvgp/nimble/functions/bum-dm-model-initialization.R") -->
+<!--     ## MCMC fit -->
+<!--     sink(here::here("model-fit", "progress",  -->
+<!--                     paste("fit-bummer-dm-testate-",  -->
+<!--                           n_chains, ".txt", sep="")), -->
+<!--          append=TRUE) -->
+<!--     cat(paste("Starting Chain", n_chains, "\n")) -->
+<!--     samples.fit <- runMCMC(Cmcmc.fit, niter=n_mcmc+n_burn, nchains=1,  -->
+<!--                            samplesAsCodaMCMC=TRUE) -->
+<!--     sink() -->
+<!--     return(mcmc(as.matrix(samples.fit[-(1:(n_burn/n_thin)), ]))) -->
+<!--   } -->
+<!--   library(snowfall) -->
+<!--   ## Initalize multicore -->
+<!--   sfInit(parallel=TRUE, cpus=4) -->
+<!--   sfClusterSetupRNG() -->
+<!--   sfExport("y", "X", "d", "N", "N_obs",  -->
+<!--            "n_burn", "n_mcmc", "n_thin") -->
+<!--   sfLibrary(coda) -->
+<!--   sfLibrary(nimble) -->
 
-## Check convergence diagnostics
-source('~/mvgp/nimble/functions/make_gelman_rubin.R')
-Rhat <- make_gelman_rubin(samples.fit)
-hist(Rhat)
-```
+<!--   ## create temporary progress file   -->
+<!--   file.create(here::here("model-fit", "progress",  -->
+<!--                                paste("fit-bummer-dm-testate-",  -->
+<!--                                      1:n_chains, ".txt", sep=""))) -->
 
-```{r}
-## Post-process
-# source("~/mvgp/nimble/functions/bummer-dm-post-processing.R")
-source("~/mvgp/nimble/functions/bummer-dm-post-processing.R")
-layout(matrix(1:3, 3, 1))
-matplot(t(a_post), type='l')
-matplot(t(b_post), type='l')
-matplot(t(c_post), type='l')
-```
+<!--   samples.fit <- sfLapply(1:4, parallelChains) -->
 
-```{r}
-layout(matrix(1:4, 2, 2))
-plot(s2_a, type='l')
-plot(mu_b, type='l')
-plot(sigma_b, type='l')
-plot(s2_c, type='l')
-```
+<!--   sfStop() -->
 
-```{r}
-idx_X <- order(X)
-layout(matrix(1:3, 3 ,1))
-matplot(X[idx_X], apply(alpha_post[, , ], c(1, 2), mean)[idx_X, ], type='l')
-```
+<!--   save(samples.fit, file=here::here("model-fit", "fit-bummer-testate.RData")) -->
+<!-- } -->
+<!-- ``` -->
 
-```{r}
-layout(matrix(1, 1, 1))
-matplot(apply(X_post, 1, mean), type='l',
-        ylim=c(-5, 5))
-matplot(apply(X_post, 1, quantile, prob = 0.025), 
-        type='l', add=TRUE, lty=2)
-matplot(apply(X_post, 1, quantile, prob = 0.975), 
-        type='l', add=TRUE, lty=2)
-lines(X[(N_obs+1):N], col = 'red')
-```
+<!-- ## Process Model Output -->
 
-```{r}
-plot(apply(X_post, 1, mean), X[(N_obs+1):N])
-```
+<!-- ```{r process-mvgp} -->
 
-```{r}
-idx_X <- order(X[(N_obs+1):N])
+<!-- ## Check convergence diagnostics -->
+<!-- source('~/mvgp/nimble/functions/make_gelman_rubin.R') -->
+<!-- Rhat <- make_gelman_rubin(samples.fit) -->
+<!-- hist(Rhat) -->
+<!-- ``` -->
 
-p_alpha_post <- alpha_post
-p_alpha_post <- aperm(p_alpha_post, c(3, 1, 2))
-for (i in 1:N) {
-  for (j in 1:nrow(p_alpha_post)) {
-  p_alpha_post[j, i, ] <- p_alpha_post[j, i, ] / sum(p_alpha_post[j, i, ])
-  }
-}
-p_alpha_post_mean <- apply(p_alpha_post, c(2, 3), mean)
-p_alpha_post_lower_95 <- apply(p_alpha_post, c(2, 3), quantile, prob=0.025)
-p_alpha_post_upper_95 <- apply(p_alpha_post, c(2, 3), quantile, prob=0.975)
+<!-- ```{r} -->
+<!-- ## Post-process -->
+<!-- # source("~/mvgp/nimble/functions/bummer-dm-post-processing.R") -->
+<!-- source("~/mvgp/nimble/functions/bummer-dm-post-processing.R") -->
+<!-- layout(matrix(1:3, 3, 1)) -->
+<!-- matplot(t(a_post), type='l') -->
+<!-- matplot(t(b_post), type='l') -->
+<!-- matplot(t(c_post), type='l') -->
+<!-- ``` -->
 
-fitPlotData <- data.frame(species = factor(rep(colnames(y), each=N_obs),
-                                                levels=colnames(y)), 
-                          count=c(y_prop[1:(N_obs), ]), 
-                          depth=rep(X[1:(N_obs)], times=d), 
-                          p=c(p_alpha_post_mean[1:(N_obs), ]),
-                          p_lower = c(p_alpha_post_lower_95[1:(N_obs), ]),
-                          p_upper = c(p_alpha_post_upper_95[1:(N_obs), ]))
+<!-- ```{r} -->
+<!-- layout(matrix(1:4, 2, 2)) -->
+<!-- plot(s2_a, type='l') -->
+<!-- plot(mu_b, type='l') -->
+<!-- plot(sigma_b, type='l') -->
+<!-- plot(s2_c, type='l') -->
+<!-- ``` -->
 
+<!-- ```{r} -->
+<!-- idx_X <- order(X) -->
+<!-- layout(matrix(1:3, 3 ,1)) -->
+<!-- matplot(X[idx_X], apply(alpha_post[, , ], c(1, 2), mean)[idx_X, ], type='l') -->
+<!-- ``` -->
 
+<!-- ```{r} -->
+<!-- layout(matrix(1, 1, 1)) -->
+<!-- matplot(apply(X_post, 1, mean), type='l', -->
+<!--         ylim=c(-5, 5)) -->
+<!-- matplot(apply(X_post, 1, quantile, prob = 0.025),  -->
+<!--         type='l', add=TRUE, lty=2) -->
+<!-- matplot(apply(X_post, 1, quantile, prob = 0.975),  -->
+<!--         type='l', add=TRUE, lty=2) -->
+<!-- lines(X[(N_obs+1):N], col = 'red') -->
+<!-- ``` -->
 
-g1 <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
-  geom_point(alpha=0.25) + theme(legend.position="none") +
-  geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species,
-                  group=species), linetype=0, alpha=0.5) +
-  ggtitle("Predicted response vs. X") + 
-  geom_line(aes(x=depth, y=p, col = species), fitPlotData, lwd=1.25)
+<!-- ```{r} -->
+<!-- plot(apply(X_post, 1, mean), X[(N_obs+1):N]) -->
+<!-- ``` -->
 
-g2 <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) + 
-  geom_point(alpha=0.25) + theme(legend.position="none") +
-  geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species,
-                  group=species), linetype=0, alpha=0.5) +
-  ggtitle("Predicted response vs. X") + 
-  geom_line(aes(x=depth, y=p, col = species), fitPlotData, lwd=1.25) + 
-  facet_wrap( ~ species, ncol = 4)
-source("~/functions/multiplot.R")
-multiplot(g1, g2, cols=2)
-```
+<!-- ```{r} -->
+<!-- idx_X <- order(X[(N_obs+1):N]) -->
 
-```{r}
-fitPlotHoldout <- data.frame(species = factor(rep(colnames(y), each=N-N_obs),
-                                                levels=colnames(y)), 
-                          count=c(y_prop[(N_obs+1):N, ]), 
-                          depth=rep(X[(N_obs+1):N], times=d), 
-                          p=c(p_alpha_post_mean[(N_obs+1):N, ]),
-                          p_lower = c(p_alpha_post_lower_95[(N_obs+1):N, ]),
-                          p_upper = c(p_alpha_post_upper_95[(N_obs+1):N, ]))
+<!-- p_alpha_post <- alpha_post -->
+<!-- p_alpha_post <- aperm(p_alpha_post, c(3, 1, 2)) -->
+<!-- for (i in 1:N) { -->
+<!--   for (j in 1:nrow(p_alpha_post)) { -->
+<!--   p_alpha_post[j, i, ] <- p_alpha_post[j, i, ] / sum(p_alpha_post[j, i, ]) -->
+<!--   } -->
+<!-- } -->
+<!-- p_alpha_post_mean <- apply(p_alpha_post, c(2, 3), mean) -->
+<!-- p_alpha_post_lower_95 <- apply(p_alpha_post, c(2, 3), quantile, prob=0.025) -->
+<!-- p_alpha_post_upper_95 <- apply(p_alpha_post, c(2, 3), quantile, prob=0.975) -->
+
+<!-- fitPlotData <- data.frame(species = factor(rep(colnames(y), each=N_obs), -->
+<!--                                                 levels=colnames(y)),  -->
+<!--                           count=c(y_prop[1:(N_obs), ]),  -->
+<!--                           depth=rep(X[1:(N_obs)], times=d),  -->
+<!--                           p=c(p_alpha_post_mean[1:(N_obs), ]), -->
+<!--                           p_lower = c(p_alpha_post_lower_95[1:(N_obs), ]), -->
+<!--                           p_upper = c(p_alpha_post_upper_95[1:(N_obs), ])) -->
 
 
 
-g1 <- ggplot(fitPlotHoldout, aes(x=depth, y=count, color=species, group=species)) + 
-  geom_point(alpha=0.25) + theme(legend.position="none") +
-  geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species,
-                  group=species), linetype=0, alpha=0.5) +
-  ggtitle("Predicted response vs. X") + 
-  geom_line(aes(x=depth, y=p, col = species), fitPlotHoldout, lwd=1.25)
+<!-- g1 <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) +  -->
+<!--   geom_point(alpha=0.25) + theme(legend.position="none") + -->
+<!--   geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species, -->
+<!--                   group=species), linetype=0, alpha=0.5) + -->
+<!--   ggtitle("Predicted response vs. X") +  -->
+<!--   geom_line(aes(x=depth, y=p, col = species), fitPlotData, lwd=1.25) -->
 
-g2 <- ggplot(fitPlotHoldout, aes(x=depth, y=count, color=species, group=species)) + 
-  geom_point(alpha=0.25) + theme(legend.position="none") +
-  geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species,
-                  group=species), linetype=0, alpha=0.5) +
-  ggtitle("Predicted response vs. X") + 
-  geom_line(aes(x=depth, y=p, col = species), fitPlotHoldout, lwd=1.25) + 
-  facet_wrap( ~ species, ncol = 4)
-source("~/functions/multiplot.R")
-multiplot(g1, g2, cols=2)
-```
+<!-- g2 <- ggplot(fitPlotData, aes(x=depth, y=count, color=species, group=species)) +  -->
+<!--   geom_point(alpha=0.25) + theme(legend.position="none") + -->
+<!--   geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species, -->
+<!--                   group=species), linetype=0, alpha=0.5) + -->
+<!--   ggtitle("Predicted response vs. X") +  -->
+<!--   geom_line(aes(x=depth, y=p, col = species), fitPlotData, lwd=1.25) +  -->
+<!--   facet_wrap( ~ species, ncol = 4) -->
+<!-- source("~/functions/multiplot.R") -->
+<!-- multiplot(g1, g2, cols=2) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- fitPlotHoldout <- data.frame(species = factor(rep(colnames(y), each=N-N_obs), -->
+<!--                                                 levels=colnames(y)),  -->
+<!--                           count=c(y_prop[(N_obs+1):N, ]),  -->
+<!--                           depth=rep(X[(N_obs+1):N], times=d),  -->
+<!--                           p=c(p_alpha_post_mean[(N_obs+1):N, ]), -->
+<!--                           p_lower = c(p_alpha_post_lower_95[(N_obs+1):N, ]), -->
+<!--                           p_upper = c(p_alpha_post_upper_95[(N_obs+1):N, ])) -->
+
+
+
+<!-- g1 <- ggplot(fitPlotHoldout, aes(x=depth, y=count, color=species, group=species)) +  -->
+<!--   geom_point(alpha=0.25) + theme(legend.position="none") + -->
+<!--   geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species, -->
+<!--                   group=species), linetype=0, alpha=0.5) + -->
+<!--   ggtitle("Predicted response vs. X") +  -->
+<!--   geom_line(aes(x=depth, y=p, col = species), fitPlotHoldout, lwd=1.25) -->
+
+<!-- g2 <- ggplot(fitPlotHoldout, aes(x=depth, y=count, color=species, group=species)) +  -->
+<!--   geom_point(alpha=0.25) + theme(legend.position="none") + -->
+<!--   geom_ribbon(aes(ymin=p_lower, ymax=p_upper, fill=species, -->
+<!--                   group=species), linetype=0, alpha=0.5) + -->
+<!--   ggtitle("Predicted response vs. X") +  -->
+<!--   geom_line(aes(x=depth, y=p, col = species), fitPlotHoldout, lwd=1.25) +  -->
+<!--   facet_wrap( ~ species, ncol = 4) -->
+<!-- source("~/functions/multiplot.R") -->
+<!-- multiplot(g1, g2, cols=2) -->
+<!-- ``` -->
 
 ## Cross-validation - Booth 2008
 Cross-validation took 22.5 hours running 6 mcmc chains on a 12-fold cross-validation problem on a 2017 iMac with 4.2GHz processor.
@@ -900,7 +900,7 @@ library(snowfall)
 library(parallel)
 library(rlecuyer)
 ## define models to fit
-models <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF", "BUMMER")
+models <- c("MVGP", "GAM", "BUMMER", "WA", "MAT", "MLRC")
 
 ## determines the number of cores on the machine
 ## make sure you have at least enough cores to fit the model
@@ -986,9 +986,13 @@ sfStop()
 
 ```{r process-mvgp-CV-booth, echo=FALSE, eval=TRUE, message=FALSE, include=FALSE, warning=FALSE}
 CRPS_out <- matrix(0, length(models), N)
+rownames(CRPS_out) <- models
 MSPE_out <- matrix(0, length(models), N)
+rownames(MSPE_out) <- models
 MAE_out <- matrix(0, length(models), N)
+rownames(MAE_out) <- models
 coverage_out <- matrix(0, length(models), N)
+rownames(coverage_out) <- models
 idx_model <- 1
 for (model_fit in models) {
   ## Load MCMC run
@@ -1000,23 +1004,23 @@ for (model_fit in models) {
   idx_model <- idx_model + 1
 }       
 
-CRPS <- data.frame(t(apply(CRPS_out[-c(6, 7), ], 1, mean, na.rm=TRUE)))
-MSPE <- data.frame(t(apply(MSPE_out[-c(6, 7), ], 1, mean)))
-MAE <- data.frame(t(apply(MAE_out[-c(6, 7), ], 1, mean)))
-coverage <- data.frame(100/N*t(apply(coverage_out[-c(6, 7), ], 1, sum)))
+CRPS <- data.frame(t(apply(CRPS_out, 1, mean, na.rm=TRUE)))
+MSPE <- data.frame(t(apply(MSPE_out, 1, mean)))
+MAE <- data.frame(t(apply(MAE_out, 1, mean)))
+coverage <- data.frame(100/N*t(apply(coverage_out, 1, sum)))
 
-colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
-colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
-colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
-colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
+colnames(CRPS) <- models
+colnames(MAE) <- models
+colnames(MSPE) <- models
+colnames(coverage) <- models
 ```
 
 
 
 ```{r}
-sim_results <- rbind(CRPS, MSPE, MAE, coverage)
-rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
-print(xtable(t(sim_results), digits=4), 
+sim_results <- t(rbind(CRPS, MSPE, MAE, coverage))
+colnames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
+print(xtable(sim_results, digits=4), 
       file=here::here("results", "cvResults-dm-mvgp-booth.tex"), 
       floating=FALSE)
 ```
@@ -1024,15 +1028,15 @@ print(xtable(t(sim_results), digits=4),
 
 
 ```{r}
-kable(t(sim_results), digits = 4)
+kable(sim_results, digits = 4)
 ```
 
 
 
 ```{r}
 ## Change to ggplot2
-rownames(CRPS_out) <- models
-CRPS_gg <- melt(CRPS_out[-c(6, 7), ])
+
+CRPS_gg <- melt(CRPS_out)
 names(CRPS_gg) <- c("Model", "Observation", "value")
 CRPS_gg$Model <- factor(CRPS_gg$Model)
 gg1 <- ggplot(CRPS_gg, aes(x=Model, y=value, color=Model, group=Model), 
@@ -1040,8 +1044,7 @@ gg1 <- ggplot(CRPS_gg, aes(x=Model, y=value, color=Model, group=Model),
   geom_violin(alpha=0.5) + scale_y_continuous(name=NULL) + ggtitle("CRPS") +
   stat_summary(fun.y=mean, geom="point")
 
-rownames(MAE_out) <- models
-MAE_gg <- melt(MAE_out[-c(6, 7), ])
+MAE_gg <- melt(MAE_out)
 names(MAE_gg) <- c("Model", "Observation", "value")
 MAE_gg$Model <- factor(MAE_gg$Model)
 gg2 <- ggplot(MAE_gg, aes(x=Model, y=value, color=Model, group=Model), 
@@ -1049,8 +1052,7 @@ gg2 <- ggplot(MAE_gg, aes(x=Model, y=value, color=Model, group=Model),
   geom_violin(alpha=0.5) +  scale_y_continuous(name=NULL) + ggtitle("MAE") +
   stat_summary(fun.y=mean, geom="point")
 
-rownames(MSPE_out) <- models
-MSPE_gg <- melt(MSPE_out[-c(6, 7), ])
+MSPE_gg <- melt(MSPE_out)
 names(MSPE_gg) <- c("Model", "Observation", "value")
 MSPE_gg$Model <- factor(MSPE_gg$Model)
 gg3 <- ggplot(MSPE_gg, aes(x=Model, y=value, color=Model, group=Model), 
@@ -1070,6 +1072,7 @@ multiplot(gg1 + theme(legend.position="none"),
 
 
 ```{r}
+layout(matrix(1:3, 3, 1))
 matplot(t(CRPS_out), type='l', main="CRPS", col=adjustcolor(1:6, alpha.f=0.25))
 matplot(t(MSPE_out), type='l', main="MSPE", col=adjustcolor(1:6, alpha.f=0.25))
 matplot(t(MAE_out), type='l', main="MAE", col=adjustcolor(1:6, alpha.f=0.25))

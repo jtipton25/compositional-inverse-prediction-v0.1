@@ -921,7 +921,7 @@ library(snowfall)
 library(parallel)
 library(rlecuyer)
 ## define models to fit
-models <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF", "BUMMER")
+models <- c("MVGP", "GAM","BUMMER", "WA", "MAT", "MLRC")
 
 ## determines the number of cores on the machine
 ## make sure you have at least enough cores to fit the model
@@ -1006,11 +1006,14 @@ sfStop()
 
 
 ```{r process-mvgp-CV-pollen, echo=FALSE, eval=TRUE, message=FALSE, include=FALSE, warning=FALSE}
-models <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF", "BUMMER")
 CRPS_out <- matrix(0, length(models), N)
+rownames(CRPS_out) <- models
 MSPE_out <- matrix(0, length(models), N)
+rownames(MSPE_out) <- models
 MAE_out <- matrix(0, length(models), N)
+rownames(MAE_out) <- models
 coverage_out <- matrix(0, length(models), N)
+rownames(coverage_out) <- models
 idx_model <- 1
 for (model_fit in models) {
   ## Load MCMC run
@@ -1022,31 +1025,31 @@ for (model_fit in models) {
   idx_model <- idx_model + 1
 }       
 
-CRPS <- data.frame(t(apply(CRPS_out[-c(6, 7), ], 1, mean)))
-MSPE <- data.frame(t(apply(MSPE_out[-c(6, 7), ], 1, mean)))
-MAE <- data.frame(t(apply(MAE_out[-c(6, 7), ], 1, mean)))
-coverage <- data.frame(100/N*t(apply(coverage_out[-c(6, 7), ], 1, sum)))
+CRPS <- data.frame(t(apply(CRPS_out, 1, mean)))
+MSPE <- data.frame(t(apply(MSPE_out, 1, mean)))
+MAE <- data.frame(t(apply(MAE_out, 1, mean)))
+coverage <- data.frame(100/N*t(apply(coverage_out, 1, sum)))
 
-colnames(CRPS) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
-colnames(MAE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
-colnames(MSPE) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
-colnames(coverage) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "BUMMER")
+colnames(CRPS) <- models
+colnames(MAE) <- models
+colnames(MSPE) <- models
+colnames(coverage) <- models
 ```
 
 
 
 ```{r, include=FALSE}
 library(xtable)
-sim_results <- rbind(CRPS, MSPE, MAE, coverage)
-rownames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
-print(xtable(t(sim_results), digits=4),
+sim_results <- t(rbind(CRPS, MSPE, MAE, coverage))
+colnames(sim_results) <- c("CRPS", "MSPE", "MAE", "95% CI coverage")
+print(xtable(sim_results, digits=4),
       file=here::here("results", "cvResults-dm-mvgp-pollen.tex"), 
       floating=FALSE)
 ```
 
 
 ```{r}
-kable(t(sim_results))
+kable(sim_results)
 ```
 
 
@@ -1054,9 +1057,8 @@ kable(t(sim_results))
 ## Change to ggplot2
 library(reshape2)
 library(ggplot2)
-rownames(CRPS_out) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF")
 
-CRPS_gg <- melt(CRPS_out[-c(6, 7), ])
+CRPS_gg <- melt(CRPS_out)
 names(CRPS_gg) <- c("Model", "Observation", "value")
 CRPS_gg$Model <- factor(CRPS_gg$Model)
 gg1 <- ggplot(CRPS_gg, aes(x=Model, y=value, color=Model, group=Model), 
@@ -1064,8 +1066,7 @@ gg1 <- ggplot(CRPS_gg, aes(x=Model, y=value, color=Model, group=Model),
   geom_violin(alpha=0.5) + scale_y_continuous(name=NULL) + ggtitle("CRPS") +
   stat_summary(fun.y=mean, geom="point")
 
-rownames(MAE_out) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF")
-MAE_gg <- melt(MAE_out[-c(6, 7), ])
+MAE_gg <- melt(MAE_out)
 names(MAE_gg) <- c("Model", "Observation", "value")
 MAE_gg$Model <- factor(MAE_gg$Model)
 gg2 <- ggplot(MAE_gg, aes(x=Model, y=value, color=Model, group=Model), 
@@ -1073,8 +1074,7 @@ gg2 <- ggplot(MAE_gg, aes(x=Model, y=value, color=Model, group=Model),
   geom_violin(alpha=0.5) +  scale_y_continuous(name=NULL) + ggtitle("MAE") +
   stat_summary(fun.y=mean, geom="point")
 
-rownames(MSPE_out) <- c("MVGP", "GAM", "WA", "MAT", "MLRC", "WAPLS", "RF")
-MSPE_gg <- melt(MSPE_out[-c(6, 7), ])
+MSPE_gg <- melt(MSPE_out)
 names(MSPE_gg) <- c("Model", "Observation", "value")
 MSPE_gg$Model <- factor(MSPE_gg$Model)
 gg3 <- ggplot(MSPE_gg, aes(x=Model, y=value, color=Model, group=Model), 
@@ -1092,6 +1092,7 @@ multiplot(gg1 + theme(legend.position="none"),
 
 
 ```{r}
+layout(matrix(1:3, 3, 1))
 matplot(t(CRPS_out), type='l', main="CRPS", col=adjustcolor(1:6, alpha.f=0.5))
 matplot(t(MSPE_out), type='l', main="MSPE", col=adjustcolor(1:6, alpha.f=0.5))
 matplot(t(MAE_out), type='l', main="MAE", col=adjustcolor(1:6, alpha.f=0.5))
